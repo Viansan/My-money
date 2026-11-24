@@ -285,6 +285,7 @@ struct AccountEditorSheet: View {
                     }
                 }
             }
+            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
             .navigationTitle(existingAccount == nil ? "新建账户" : "编辑账户")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)
@@ -296,10 +297,6 @@ struct AccountEditorSheet: View {
                     Button("保存") { saveAccount() }
                         .fontWeight(.semibold)
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") { focusedField = nil }
                 }
             }
             .onAppear {

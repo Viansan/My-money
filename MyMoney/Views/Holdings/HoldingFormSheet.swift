@@ -14,7 +14,6 @@ struct HoldingFormSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
 
     @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
@@ -219,7 +218,7 @@ struct HoldingFormSheet: View {
                 // 1. 计价方式与智能代码识别（固定资产自动隐藏证券/基金切换）
                 Section {
                     if showEntryKindPicker {
-                        Picker("记录方式", selection: $entryKind.animation(Motion.standard(reduceMotion: reduceMotion))) {
+                        Picker("记录方式", selection: $entryKind) {
                             ForEach(EntryKind.allCases) { kind in
                                 Text(kind.rawValue).tag(kind)
                             }
@@ -244,7 +243,6 @@ struct HoldingFormSheet: View {
                                 if isLookingUpQuote {
                                     ProgressView()
                                         .controlSize(.small)
-                                        .transition(.opacity)
                                 } else if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                     Button {
                                         Task { await performSmartLookup(rawCode: code, force: true) }
@@ -253,13 +251,11 @@ struct HoldingFormSheet: View {
                                             .font(.title3)
                                             .foregroundStyle(Color.accentColor)
                                     }
-                                    .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
+                                    .buttonStyle(.plain)
                                     .accessibilityLabel("重新识别行情")
-                                    .transition(.opacity)
                                 }
                             }
                             .frame(width: 24, height: 24)
-                            .animation(Motion.micro(reduceMotion: reduceMotion), value: isLookingUpQuote)
                         }
 
                         // 仅在极少数真实重码（如 000001 / LOF）时显示 1 键切换候选
@@ -273,9 +269,7 @@ struct HoldingFormSheet: View {
                                     let isSelected = (candidate.mode == resolvedQuoteMode)
                                     Button {
                                         Haptics.selection()
-                                        withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                                            applyCandidate(candidate, overwriteName: true)
-                                        }
+                                        applyCandidate(candidate, overwriteName: true)
                                     } label: {
                                         HStack {
                                             Text(candidate.mode.title)
@@ -303,22 +297,19 @@ struct HoldingFormSheet: View {
                                                 .fill(isSelected ? Color.accentColor.opacity(0.1) : Color(.tertiarySystemFill))
                                         )
                                     }
-                                    .buttonStyle(TactilePressButtonStyle(pressedScale: 0.985))
+                                    .buttonStyle(.plain)
                                 }
                             }
                             .padding(.vertical, 2)
-                            .transition(.opacity)
                         } else if let lookupStatusText {
                             HStack(spacing: 6) {
                                 Image(systemName: lookupIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
                                     .font(.caption)
                                     .foregroundStyle(lookupIsError ? .orange : .green)
-                                    .contentTransition(.symbolEffect(.replace))
                                 Text(lookupStatusText)
                                     .font(.caption)
                                     .foregroundStyle(lookupIsError ? .orange : .secondary)
                             }
-                            .transition(.opacity)
                         }
                     }
 
@@ -338,7 +329,7 @@ struct HoldingFormSheet: View {
                     Text("基本信息")
                 }
 
-                // 2. 当前价值 / 存单本金
+                // 2. 当前价值 / 存款金额
                 Section {
                     if entryKind == .quoteTracked {
                         HStack {
@@ -369,11 +360,10 @@ struct HoldingFormSheet: View {
                                 .font(.callout.weight(.semibold))
                                 .monospacedDigit()
                                 .contentTransition(.numericText(value: previewMarketValue))
-                                .animation(Motion.numeric(reduceMotion: reduceMotion), value: previewMarketValue)
                         }
                     } else {
                         HStack {
-                            Text(isFixedAsset ? "本金 / 当前金额（元）" : "当前金额（元）")
+                            Text(isFixedAsset ? "存款金额（元）" : "当前金额（元）")
                             Spacer()
                             TextField("0.00", text: $manualAmountText)
                                 .keyboardType(.decimalPad)
@@ -383,7 +373,7 @@ struct HoldingFormSheet: View {
                         }
                     }
                 } header: {
-                    Text(isFixedAsset ? "本金与估值" : "当前价值")
+                    Text(isFixedAsset ? "金额" : "当前价值")
                 }
 
                 // 3. 归属分类与存放账户
@@ -486,7 +476,7 @@ struct HoldingFormSheet: View {
                                                         in: Capsule()
                                                     )
                                             }
-                                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.93))
+                                            .buttonStyle(.plain)
                                         }
                                     }
                                 }
@@ -506,7 +496,6 @@ struct HoldingFormSheet: View {
                                     .monospacedDigit()
                                     .foregroundStyle(CategoryColorToken.amber.color)
                                     .contentTransition(.numericText(value: maturityInterest))
-                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: maturityInterest)
                             }
 
                             HStack {
@@ -519,7 +508,6 @@ struct HoldingFormSheet: View {
                                     .font(.subheadline.weight(.semibold))
                                     .monospacedDigit()
                                     .contentTransition(.numericText(value: totalAtMaturity))
-                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: totalAtMaturity)
                             }
                         } else if let annualInterest = previewAnnualInterest {
                             HStack {
@@ -531,18 +519,17 @@ struct HoldingFormSheet: View {
                                     .monospacedDigit()
                                     .foregroundStyle(CategoryColorToken.amber.color)
                                     .contentTransition(.numericText(value: annualInterest))
-                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: annualInterest)
                             }
                         }
 
                         TextField("备注（选填，如存单号、可否提前支取等）", text: $note)
                             .focused($focusedField, equals: .note)
                     } else {
-                        Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
+                        Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost)
 
                         if trackCost {
                             if entryKind == .quoteTracked {
-                                Picker("成本口径", selection: $costEntryStyle.animation(Motion.micro(reduceMotion: reduceMotion))) {
+                                Picker("成本口径", selection: $costEntryStyle) {
                                     ForEach(CostEntryStyle.allCases) { style in
                                         Text(style.title).tag(style)
                                     }
@@ -575,7 +562,6 @@ struct HoldingFormSheet: View {
                                         .monospacedDigit()
                                         .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
                                         .contentTransition(.numericText(value: pnl))
-                                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
                                 }
                             }
                         }
@@ -606,6 +592,7 @@ struct HoldingFormSheet: View {
                     }
                 }
             }
+            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
             .navigationTitle(isEditing ? (isFixedAsset ? "编辑固定资产" : "编辑资产") : (isFixedAsset ? "新增固定资产" : "新增资产"))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)
@@ -617,10 +604,6 @@ struct HoldingFormSheet: View {
                     Button("保存") { saveHolding() }
                         .fontWeight(.semibold)
                         .disabled(!canSave)
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") { focusedField = nil }
                 }
             }
             .onAppear(perform: loadInitialDataIfNeeded)
@@ -752,22 +735,18 @@ struct HoldingFormSheet: View {
             let candidates = try await refreshStore.lookupSmartCandidates(code: cleaned)
             guard !Task.isCancelled else { return }
             lastResolvedCode = cleaned
-            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
-                lookupCandidates = candidates
-                if let primary = candidates.first {
-                    applyCandidate(primary, overwriteName: !userEditedName || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
+            lookupCandidates = candidates
+            if let primary = candidates.first {
+                applyCandidate(primary, overwriteName: !userEditedName || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if !candidates.isEmpty {
                 Haptics.success()
             }
         } catch {
             guard !Task.isCancelled else { return }
-            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
-                lookupCandidates = []
-                lookupStatusText = error.localizedDescription
-                lookupIsError = true
-            }
+            lookupCandidates = []
+            lookupStatusText = error.localizedDescription
+            lookupIsError = true
             Haptics.warning()
         }
     }

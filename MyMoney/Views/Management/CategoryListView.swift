@@ -314,7 +314,7 @@ struct CategoryEditorSheet: View {
 
                 if pool == .investable {
                     Section {
-                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio.animation(Motion.standard(reduceMotion: reduceMotion)))
+                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio)
 
                         if enableTargetRatio {
                             HStack {
@@ -433,6 +433,7 @@ struct CategoryEditorSheet: View {
                     }
                 }
             }
+            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
             .navigationTitle(existingCategory == nil ? "新建资产类别" : "编辑资产类别")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)
@@ -444,10 +445,6 @@ struct CategoryEditorSheet: View {
                     Button("保存") { saveCategory() }
                         .fontWeight(.semibold)
                         .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") { focusedField = nil }
                 }
             }
             .onAppear {

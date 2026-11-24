@@ -80,3 +80,45 @@ struct RefreshToolbarButton: View {
         .accessibilityLabel(isRefreshing ? "正在刷新行情" : "刷新行情")
     }
 }
+
+/// 纯 SwiftUI 键盘收起浮层（支持交互式下拉收起 + 右下角浮动「完成」胶囊）
+/// - 彻底规避 iOS 26 下 `ToolbarItemGroup(placement: .keyboard)` 在第三方输入法与 `.decimalPad` 切换时触发 UIKit `NSArrayM nil` 崩溃
+struct KeyboardDismissOverlayModifier: ViewModifier {
+    let isVisible: Bool
+    let onDismiss: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .scrollDismissesKeyboard(.interactively)
+            .overlay(alignment: .bottomTrailing) {
+                if isVisible {
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Text("完成")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .overlay(
+                                Capsule()
+                                    .strokeBorder(Color(.separator).opacity(0.35), lineWidth: 0.5)
+                            )
+                            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 10)
+                    .accessibilityLabel("收起键盘")
+                }
+            }
+    }
+}
+
+extension View {
+    func keyboardDismissOverlay(isVisible: Bool, onDismiss: @escaping () -> Void) -> some View {
+        modifier(KeyboardDismissOverlayModifier(isVisible: isVisible, onDismiss: onDismiss))
+    }
+}
+

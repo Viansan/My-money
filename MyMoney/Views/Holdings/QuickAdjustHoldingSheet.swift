@@ -20,6 +20,7 @@ struct QuickAdjustHoldingSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
 
     let holding: AssetHolding
@@ -156,26 +157,33 @@ struct QuickAdjustHoldingSheet: View {
                             Text(Formatters.currency(previewMarketValue))
                                 .font(.system(.title3, design: .rounded, weight: .bold))
                                 .monospacedDigit()
+                                .contentTransition(.numericText(value: previewMarketValue))
+                                .animation(Motion.numeric(reduceMotion: reduceMotion), value: previewMarketValue)
 
                             if abs(valueChangeDelta) >= 0.01 {
                                 Text("变动 \(Formatters.signedCurrency(valueChangeDelta))")
                                     .font(.caption.weight(.semibold))
                                     .monospacedDigit()
                                     .foregroundStyle(Color.accentColor)
+                                    .contentTransition(.numericText(value: valueChangeDelta))
+                                    .transition(.opacity)
                             } else if let cost = previewTotalCost {
                                 let pnl = previewMarketValue - cost
                                 Text("盈亏 \(Formatters.signedCurrency(pnl))")
                                     .font(.caption.weight(.medium))
                                     .monospacedDigit()
                                     .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
+                                    .contentTransition(.numericText(value: pnl))
+                                    .transition(.opacity)
                             }
                         }
+                        .animation(Motion.micro(reduceMotion: reduceMotion), value: abs(valueChangeDelta) >= 0.01)
                     }
                 }
 
                 // 核心数量 / 金额调整
                 Section {
-                    Picker("修改方式", selection: $adjustStyle) {
+                    Picker("修改方式", selection: $adjustStyle.animation(Motion.standard(reduceMotion: reduceMotion))) {
                         ForEach(AdjustStyle.allCases) { style in
                             Text(style.rawValue).tag(style)
                         }
@@ -196,7 +204,7 @@ struct QuickAdjustHoldingSheet: View {
                                 .focused($focusedField, equals: .primaryNumber)
                         }
                     } else {
-                        Picker("变动方向", selection: $deltaDirection) {
+                        Picker("变动方向", selection: $deltaDirection.animation(Motion.micro(reduceMotion: reduceMotion))) {
                             ForEach(DeltaDirection.allCases) { dir in
                                 Text(dir.rawValue).tag(dir)
                             }
@@ -222,7 +230,9 @@ struct QuickAdjustHoldingSheet: View {
                                 Button {
                                     Haptics.selection()
                                     let current = parsedDeltaNumber
-                                    deltaNumberText = Formatters.editableDecimal(current + preset.amount, maxDecimals: 2)
+                                    withAnimation(Motion.numeric(reduceMotion: reduceMotion)) {
+                                        deltaNumberText = Formatters.editableDecimal(current + preset.amount, maxDecimals: 2)
+                                    }
                                 } label: {
                                     Text("\(deltaDirection == .add ? "+" : "-")\(preset.label)")
                                         .font(.caption.weight(.medium))
@@ -230,7 +240,7 @@ struct QuickAdjustHoldingSheet: View {
                                         .padding(.vertical, 5)
                                         .background(Color(.tertiarySystemFill), in: Capsule())
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(TactilePressButtonStyle(pressedScale: 0.93))
                             }
 
                             Spacer()
@@ -238,13 +248,17 @@ struct QuickAdjustHoldingSheet: View {
                             if parsedDeltaNumber > 0 {
                                 Button("清零") {
                                     Haptics.selection()
-                                    deltaNumberText = ""
+                                    withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
+                                        deltaNumberText = ""
+                                    }
                                 }
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .buttonStyle(.plain)
+                                .buttonStyle(TactilePressButtonStyle(pressedScale: 0.92))
+                                .transition(.opacity)
                             }
                         }
+                        .animation(Motion.micro(reduceMotion: reduceMotion), value: parsedDeltaNumber > 0)
 
                         HStack {
                             Text(usesShares ? "调整后总份额" : "调整后总金额")
@@ -253,6 +267,8 @@ struct QuickAdjustHoldingSheet: View {
                             Text(usesShares ? Formatters.shares(previewSharesOrAmount) : Formatters.currency(previewSharesOrAmount))
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
+                                .contentTransition(.numericText(value: previewSharesOrAmount))
+                                .animation(Motion.numeric(reduceMotion: reduceMotion), value: previewSharesOrAmount)
                         }
                     }
 
@@ -270,13 +286,20 @@ struct QuickAdjustHoldingSheet: View {
                                 Button {
                                     Task { await fetchLatestQuote() }
                                 } label: {
-                                    if isFetchingQuote {
-                                        ProgressView()
-                                    } else {
-                                        Label("拉现价", systemImage: "arrow.clockwise")
-                                            .labelStyle(.titleAndIcon)
-                                            .font(.caption.weight(.semibold))
+                                    ZStack {
+                                        if isFetchingQuote {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                                .transition(.opacity)
+                                        } else {
+                                            Label("拉现价", systemImage: "arrow.clockwise")
+                                                .labelStyle(.titleAndIcon)
+                                                .font(.caption.weight(.semibold))
+                                                .transition(.opacity)
+                                        }
                                     }
+                                    .frame(minWidth: 62, minHeight: 18)
+                                    .animation(Motion.micro(reduceMotion: reduceMotion), value: isFetchingQuote)
                                 }
                                 .buttonStyle(.bordered)
                                 .controlSize(.small)
@@ -288,6 +311,7 @@ struct QuickAdjustHoldingSheet: View {
                             Text(quoteErrorMessage)
                                 .font(.caption)
                                 .foregroundStyle(.orange)
+                                .transition(.opacity)
                         }
                     }
                 } header: {
@@ -296,7 +320,7 @@ struct QuickAdjustHoldingSheet: View {
 
                 // 选填成本调整
                 Section {
-                    Toggle("记录投入成本（算盈亏）", isOn: $trackCost)
+                    Toggle("记录投入成本（算盈亏）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
 
                     if trackCost {
                         if adjustStyle == .deltaChange {

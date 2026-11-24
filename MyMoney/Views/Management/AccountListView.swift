@@ -82,9 +82,16 @@ struct AccountListView: View {
         }
     }
 
+    private var totalNetWorth: Double {
+        holdings.reduce(0.0) { $0 + $1.marketValue }
+    }
+
     private func accountRow(_ account: AssetAccount) -> some View {
         let accHoldings = holdings.filter { $0.account?.id == account.id }
         let sum = accHoldings.reduce(0.0) { $0 + $1.marketValue }
+        let shareText: String? = totalNetWorth > 0 && sum > 0
+            ? Formatters.percentPoints((sum / totalNetWorth) * 100.0)
+            : nil
 
         return Button {
             Haptics.lightImpact()
@@ -94,40 +101,49 @@ struct AccountListView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(account.tintColor.opacity(0.15))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 30, height: 30)
                     Image(systemName: account.iconName)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(account.tintColor)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(account.name)
-                        .font(.body.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                     if !account.subtitle.isEmpty {
                         Text(account.subtitle)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else {
                         Text("\(accHoldings.count) 项资产")
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
 
                 Spacer()
 
-                Text(Formatters.currency(sum, hidden: refreshStore.hideAmounts, compact: true))
-                    .font(.caption.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(Formatters.currency(sum, hidden: refreshStore.hideAmounts, compact: true))
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+
+                    if let shareText {
+                        Text(shareText)
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 Haptics.lightImpact()
@@ -153,6 +169,7 @@ struct AccountListView: View {
 struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetAccount.sortOrder) private var allAccounts: [AssetAccount]
     @Query private var allHoldings: [AssetHolding]
@@ -201,22 +218,27 @@ struct AccountEditorSheet: View {
                 Section("标识颜色") {
                     LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(CategoryColorToken.allCases) { token in
+                            let selected = (colorToken == token)
                             Button {
                                 Haptics.selection()
-                                colorToken = token
+                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
+                                    colorToken = token
+                                }
                             } label: {
                                 ZStack {
                                     Circle()
                                         .fill(token.color)
                                         .frame(width: 34, height: 34)
-                                    if colorToken == token {
+                                        .scaleEffect(selected && !reduceMotion ? 1.08 : 1.0)
+                                    if selected {
                                         Image(systemName: "checkmark")
                                             .font(.caption.weight(.bold))
                                             .foregroundStyle(.white)
+                                            .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
                                     }
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
                         }
                     }
                     .padding(.vertical, 6)
@@ -225,20 +247,24 @@ struct AccountEditorSheet: View {
                 Section("图标") {
                     LazyVGrid(columns: iconColumns, spacing: 12) {
                         ForEach(PresetIcons.accountIcons, id: \.self) { symbol in
+                            let selected = (iconName == symbol)
                             Button {
                                 Haptics.selection()
-                                iconName = symbol
+                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
+                                    iconName = symbol
+                                }
                             } label: {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(iconName == symbol ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
+                                        .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
                                         .frame(width: 44, height: 40)
                                     Image(systemName: symbol)
                                         .font(.callout.weight(.semibold))
-                                        .foregroundStyle(iconName == symbol ? colorToken.color : .secondary)
+                                        .foregroundStyle(selected ? colorToken.color : .secondary)
                                 }
+                                .scaleEffect(selected && !reduceMotion ? 1.05 : 1.0)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.92))
                         }
                     }
                     .padding(.vertical, 6)

@@ -1,61 +1,52 @@
 import SwiftUI
 import SwiftData
 
-/// Tab 1：资产总览页
-/// - 紧致双表面布局：顶卡净值 + 主卡（比例构成条与分组明细一体化）
-/// - 行内信息零冗余：
-///   - 第一行右侧仅放「当前实际金额」（黑色主角）
-///   - 第二行左侧放「实际 % / 目标 % · 目标金额」，右侧放「差/超 具体金额」（温和区分超配与待补，不与黑字重叠争抢）
+/// Tab 1：资产总览页（极简方案 B）
+/// - 聚焦「总净值 + 投资/固定资产结构」，彻底去除冗余图表与重复账户入口（看账户直达 Tab 2）
+/// - 全部数值、进度条、双池滑块与按压状态均采用统一 Motion 物理曲线，克制跟手、零抖动
 struct OverviewView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
 
     @Query(sort: \AssetHolding.sortOrder) private var holdings: [AssetHolding]
     @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
     @Query(sort: \AssetAccount.sortOrder) private var accounts: [AssetAccount]
 
-    @State private var selectedLens: OverviewLens = .investable
-    @State private var highlightedSliceID: UUID?
+    @State private var activePool: AssetPool = .investable
     @State private var showingAddHolding = false
+    @Namespace private var poolIndicatorNS
 
     private var snapshot: PortfolioSnapshot {
         PortfolioSnapshot.build(holdings: holdings, categories: categories, accounts: accounts)
     }
 
-    private var availableLenses: [OverviewLens] {
-        var lenses: [OverviewLens] = []
-        if snapshot.hasInvestableHoldings || snapshot.configuredTargetSum != nil {
-            lenses.append(.investable)
-        }
-        if snapshot.hasFixedHoldings {
-            lenses.append(.fixed)
-        }
-        if !snapshot.accountSlices.isEmpty {
-            lenses.append(.accounts)
-        }
-        return lenses.isEmpty ? [.investable] : lenses
-    }
-
-    private var addSheetDefaultPool: AssetPool {
-        selectedLens == .fixed ? .fixed : .investable
+    private var displayedSlices: [AllocationSlice] {
+        activePool == .fixed ? snapshot.fixedSlices : snapshot.investableSlices
     }
 
     var body: some View {
+        @Bindable var bindableStore = refreshStore
+
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
                     if holdings.isEmpty {
                         emptyWelcomeCard
                             .padding(.top, 20)
+                            .transition(.opacity)
                     } else {
                         heroNetWorthCard
 
-                        unifiedAllocationSurface
+                        structureCard
                     }
                 }
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
                 .padding(.bottom, 32)
+                .animation(Motion.standard(reduceMotion: reduceMotion), value: holdings.isEmpty)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("我的资产")
@@ -68,33 +59,18 @@ struct OverviewView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if !holdings.isEmpty {
-                        Button {
-                            Haptics.selection()
-                            refreshStore.hideAmounts.toggle()
-                        } label: {
-                            Image(systemName: refreshStore.hideAmounts ? "eye.slash" : "eye")
-                                .font(.subheadline)
-                        }
-                        .accessibilityLabel(refreshStore.hideAmounts ? "显示金额" : "隐藏金额")
+                        PrivacyToggleButton(hideAmounts: $bindableStore.hideAmounts)
                     }
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         if snapshot.hasRefreshableHoldings {
-                            Button {
+                            RefreshToolbarButton(isRefreshing: refreshStore.isRefreshing) {
                                 Task {
                                     await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext, silent: false)
                                 }
-                            } label: {
-                                if refreshStore.isRefreshing {
-                                    ProgressView()
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                }
                             }
-                            .disabled(refreshStore.isRefreshing)
-                            .accessibilityLabel("刷新行情")
                         }
 
                         Button {
@@ -103,28 +79,30 @@ struct OverviewView: View {
                         } label: {
                             Image(systemName: "plus")
                                 .fontWeight(.semibold)
+                                .frame(width: 24, height: 24)
                         }
                         .accessibilityLabel("新增资产")
                     }
                 }
             }
             .sheet(isPresented: $showingAddHolding) {
-                HoldingFormSheet(existingHolding: nil, preselectedPool: addSheetDefaultPool)
+                HoldingFormSheet(existingHolding: nil, preselectedPool: activePool)
             }
-            .onAppear(perform: reconcileSelectedLens)
-            .onChange(of: availableLenses) { _, _ in
-                reconcileSelectedLens()
-            }
+            .onAppear(perform: reconcileActivePool)
+            .onChange(of: snapshot.hasInvestableHoldings) { _, _ in reconcileActivePool() }
+            .onChange(of: snapshot.hasFixedHoldings) { _, _ in reconcileActivePool() }
         }
     }
 
-    private func reconcileSelectedLens() {
-        if !availableLenses.contains(selectedLens), let first = availableLenses.first {
-            selectedLens = first
+    private func reconcileActivePool() {
+        if activePool == .fixed && !snapshot.hasFixedHoldings {
+            activePool = .investable
+        } else if activePool == .investable && !snapshot.hasInvestableHoldings && snapshot.hasFixedHoldings && snapshot.configuredTargetSum == nil {
+            activePool = .fixed
         }
     }
 
-    // MARK: - 表面 1：紧致总净值与双池一体化头卡
+    // MARK: - 表面 1：净值总览与双池滑动切换卡
 
     private var heroNetWorthCard: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -150,6 +128,8 @@ struct OverviewView: View {
                         .monospacedDigit()
                         .lineLimit(1)
                         .minimumScaleFactor(0.68)
+                        .contentTransition(.numericText(value: snapshot.totalNetWorth))
+                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: snapshot.totalNetWorth)
 
                     Spacer(minLength: 4)
 
@@ -157,8 +137,10 @@ struct OverviewView: View {
                         let delta = snapshot.overallPnL.profitLoss
                         HStack(spacing: 3) {
                             Text(Formatters.signedCurrency(delta, hidden: refreshStore.hideAmounts))
+                                .contentTransition(.numericText(value: delta))
                             if !snapshot.hasBothPools, let rate = snapshot.overallPnL.profitLossRate {
                                 Text(Formatters.signedRate(rate, hidden: refreshStore.hideAmounts))
+                                    .contentTransition(.numericText(value: rate))
                             }
                         }
                         .font(.caption.weight(.semibold))
@@ -170,6 +152,7 @@ struct OverviewView: View {
                             refreshStore.pnlColorScheme.color(for: delta).opacity(0.12),
                             in: Capsule()
                         )
+                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: delta)
                     }
                 }
 
@@ -184,6 +167,7 @@ struct OverviewView: View {
                             RoundedRectangle(cornerRadius: 2)
                                 .fill(CategoryColorToken.amber.color.opacity(0.85))
                         }
+                        .animation(Motion.standard(reduceMotion: reduceMotion), value: invRatio)
                     }
                     .frame(height: 4)
                     .padding(.top, 4)
@@ -198,56 +182,52 @@ struct OverviewView: View {
 
                 HStack(spacing: 0) {
                     poolStripColumn(
+                        pool: .investable,
                         title: "投资资产",
                         roleHint: "占比分母",
                         badgeColor: CategoryColorToken.blue.color,
                         amount: snapshot.investableTotal,
                         sharePercent: snapshot.investableShareOfNetWorth,
-                        pnl: snapshot.investablePnL,
-                        isSelected: selectedLens == .investable
-                    ) {
-                        Haptics.selection()
-                        withAnimation(.snappy) {
-                            selectedLens = .investable
-                            highlightedSliceID = nil
-                        }
-                    }
+                        pnl: snapshot.investablePnL
+                    )
 
                     Divider()
                         .frame(height: 36)
 
                     poolStripColumn(
+                        pool: .fixed,
                         title: "固定资产",
                         roleHint: "不计入投资占比",
                         badgeColor: CategoryColorToken.amber.color,
                         amount: snapshot.fixedTotal,
                         sharePercent: snapshot.fixedShareOfNetWorth,
-                        pnl: snapshot.fixedPnL,
-                        isSelected: selectedLens == .fixed
-                    ) {
-                        Haptics.selection()
-                        withAnimation(.snappy) {
-                            selectedLens = .fixed
-                            highlightedSliceID = nil
-                        }
-                    }
+                        pnl: snapshot.fixedPnL
+                    )
                 }
             }
         }
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
     private func poolStripColumn(
+        pool: AssetPool,
         title: String,
         roleHint: String,
         badgeColor: Color,
         amount: Double,
         sharePercent: Double,
-        pnl: PnLSummary,
-        isSelected: Bool,
-        action: @escaping () -> Void
+        pnl: PnLSummary
     ) -> some View {
-        Button(action: action) {
+        let isSelected = (activePool == pool)
+
+        return Button {
+            guard activePool != pool else { return }
+            Haptics.selection()
+            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                activePool = pool
+            }
+        } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
                     Circle()
@@ -261,6 +241,7 @@ struct OverviewView: View {
                         .font(.caption2)
                         .monospacedDigit()
                         .foregroundStyle(.tertiary)
+                        .contentTransition(.numericText(value: sharePercent))
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -270,6 +251,7 @@ struct OverviewView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
+                        .contentTransition(.numericText(value: amount))
 
                     Spacer(minLength: 2)
 
@@ -298,117 +280,65 @@ struct OverviewView: View {
                     Rectangle()
                         .fill(badgeColor)
                         .frame(height: 2)
+                        .matchedGeometryEffect(id: "poolIndicator", in: poolIndicatorNS)
                 }
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.99, pressedOpacity: 0.88))
     }
 
-    // MARK: - 表面 2：比例构成条 + 明细一体化容器
+    // MARK: - 表面 2：纯净资产结构列表（投资结构 / 固定资产明细）
 
-    private var unifiedAllocationSurface: some View {
+    private var structureCard: some View {
         VStack(spacing: 0) {
-            AllocationChartSection(
-                selectedLens: $selectedLens,
-                highlightedSliceID: $highlightedSliceID,
-                availableLenses: availableLenses,
-                snapshot: snapshot,
-                hideAmounts: refreshStore.hideAmounts
-            )
-
-            Divider()
-
             HStack {
-                Text(breakdownTitle)
+                Text(activePool == .fixed ? "固定资产明细" : "投资结构")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
 
                 Spacer()
 
-                if let trailing = breakdownTrailingNote {
-                    Text(trailing.text)
+                if activePool == .investable, let targetSum = snapshot.configuredTargetSum {
+                    Text("目标合计 \(Formatters.percentPoints(targetSum, digits: 0))")
                         .font(.caption2.weight(.medium))
                         .monospacedDigit()
-                        .foregroundStyle(trailing.isWarning ? Color.orange : Color.secondary)
+                        .foregroundStyle(abs(targetSum - 100) >= 0.1 ? Color.orange : Color.secondary)
+                } else if activePool == .fixed {
+                    Text("占总净值 \(Formatters.percentPoints(snapshot.fixedShareOfNetWorth))")
+                        .font(.caption2.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("共 \(displayedSlices.count) 类")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            .padding(.vertical, 8)
             .background(Color(.tertiarySystemGroupedBackground).opacity(0.45))
 
             Divider()
 
-            breakdownRows
+            VStack(spacing: 0) {
+                ForEach(Array(displayedSlices.enumerated()), id: \.element.id) { index, slice in
+                    allocationSliceRow(slice: slice, showTargetIfPresent: activePool == .investable)
+                    if index < displayedSlices.count - 1 {
+                        Divider().padding(.leading, 50)
+                    }
+                }
+            }
+            .id(activePool)
+            .transition(.opacity)
         }
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .animation(Motion.standard(reduceMotion: reduceMotion), value: activePool)
     }
 
-    private var breakdownTitle: String {
-        switch selectedLens {
-        case .investable: return "投资结构"
-        case .fixed: return "固定资产明细"
-        case .accounts: return "账户分布"
-        }
-    }
-
-    private var breakdownTrailingNote: (text: String, isWarning: Bool)? {
-        switch selectedLens {
-        case .investable:
-            if let targetSum = snapshot.configuredTargetSum {
-                return ("目标合计 \(Formatters.percentPoints(targetSum, digits: 0))", abs(targetSum - 100) >= 0.1)
-            }
-            return ("共 \(snapshot.investableSlices.count) 类", false)
-        case .fixed:
-            return ("占总净值 \(Formatters.percentPoints(snapshot.fixedShareOfNetWorth))", false)
-        case .accounts:
-            return ("共 \(snapshot.accountSlices.count) 个账户", false)
-        }
-    }
-
-    @ViewBuilder
-    private var breakdownRows: some View {
-        switch selectedLens {
-        case .investable:
-            VStack(spacing: 0) {
-                ForEach(Array(snapshot.investableSlices.enumerated()), id: \.element.id) { index, slice in
-                    allocationSliceRow(slice: slice, showTargetIfPresent: true)
-                    if index < snapshot.investableSlices.count - 1 {
-                        Divider().padding(.leading, 50)
-                    }
-                }
-            }
-
-        case .fixed:
-            VStack(spacing: 0) {
-                ForEach(Array(snapshot.fixedSlices.enumerated()), id: \.element.id) { index, slice in
-                    allocationSliceRow(slice: slice, showTargetIfPresent: false)
-                    if index < snapshot.fixedSlices.count - 1 {
-                        Divider().padding(.leading, 50)
-                    }
-                }
-            }
-
-        case .accounts:
-            VStack(spacing: 0) {
-                ForEach(Array(snapshot.accountSlices.enumerated()), id: \.element.id) { index, acc in
-                    accountSliceRow(acc)
-                    if index < snapshot.accountSlices.count - 1 {
-                        Divider().padding(.leading, 50)
-                    }
-                }
-            }
-        }
-    }
-
-    /// 单行分类明细（零重叠分层）：
-    /// - 第一行：类名 + 实际金额（唯一主角黑字）
-    /// - 第二行：左「实际% / 目标% · 目标¥金额」，右「超/差 ¥金额」（超配暖橙轻提醒，待补中性灰，杜绝满屏黄字）
     private func allocationSliceRow(slice: AllocationSlice, showTargetIfPresent: Bool) -> some View {
-        let isHighlighted = (highlightedSliceID == slice.id)
-
-        return Button {
+        Button {
             refreshStore.drillDownToCategory(id: slice.categoryID, name: slice.name, pool: slice.pool)
         } label: {
             HStack(alignment: .center, spacing: 10) {
@@ -422,7 +352,7 @@ struct OverviewView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    // 第一行：名称 + 唯一主角金额
+                    // 第一行：类别名 + 唯一主角金额
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(slice.name)
                             .font(.subheadline.weight(.semibold))
@@ -440,15 +370,18 @@ struct OverviewView: View {
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .lineLimit(1)
+                            .contentTransition(.numericText(value: slice.amount))
+                            .animation(Motion.numeric(reduceMotion: reduceMotion), value: slice.amount)
                     }
 
-                    // 第二行：占比与目标对比（信息各司其职，无重复百分比）
+                    // 第二行：占比与目标对比（无重复信息）
                     if showTargetIfPresent, let targetPct = slice.targetRatioPercent, let devPts = slice.deviationPoints {
                         HStack(spacing: 6) {
                             HStack(spacing: 3) {
                                 Text(Formatters.percentPoints(slice.poolRatioPercent))
                                     .fontWeight(.medium)
                                     .foregroundStyle(.secondary)
+                                    .contentTransition(.numericText(value: slice.poolRatioPercent))
                                 Text("/ \(Formatters.percentPoints(targetPct, digits: 0))")
                                     .foregroundStyle(.tertiary)
                                 if let targetAmt = slice.targetAmount, !refreshStore.hideAmounts {
@@ -493,7 +426,7 @@ struct OverviewView: View {
                         .monospacedDigit()
                     }
 
-                    // 第三行：紧致进度条 + 目标刻度线
+                    // 第三行：紧致进度条 + 目标刻度线（数值更新时顺滑过渡）
                     GeometryReader { geo in
                         let width = max(geo.size.width, 1)
                         let actualFraction = min(max(slice.poolRatioPercent / 100.0, 0), 1)
@@ -516,6 +449,7 @@ struct OverviewView: View {
                                     .offset(x: markerX - 1)
                             }
                         }
+                        .animation(Motion.standard(reduceMotion: reduceMotion), value: actualFraction)
                     }
                     .frame(height: 8)
                 }
@@ -525,14 +459,12 @@ struct OverviewView: View {
                     .foregroundStyle(.quaternary)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(isHighlighted ? slice.color.opacity(0.08) : Color.clear)
+            .padding(.vertical, 9.5)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.88))
     }
 
-    /// 差额辅助标：超配用轻暖橙胶囊提示，待补用克制中性灰展示，避免满屏亮黄抢主角
     @ViewBuilder
     private func targetGapLabel(devPoints: Double, devAmount: Double?) -> some View {
         if abs(devPoints) < 0.2 {
@@ -547,95 +479,18 @@ struct OverviewView: View {
                     .padding(.horizontal, 5)
                     .padding(.vertical, 1.5)
                     .background(Color.orange.opacity(0.11), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .contentTransition(.numericText(value: devAmount))
             } else {
                 Text("差 \(Formatters.wholeCurrency(abs(devAmount)))")
                     .fontWeight(.medium)
                     .foregroundStyle(.secondary)
+                    .contentTransition(.numericText(value: abs(devAmount)))
             }
         } else {
             Text(devPoints > 0 ? "高 \(Formatters.percentPoints(devPoints))" : "低 \(Formatters.percentPoints(abs(devPoints)))")
                 .fontWeight(.medium)
                 .foregroundStyle(devPoints > 0 ? Color.orange : Color.secondary)
         }
-    }
-
-    private func accountSliceRow(_ acc: AccountSlice) -> some View {
-        let isHighlighted = (highlightedSliceID == acc.id)
-
-        return Button {
-            refreshStore.drillDownToAccount(id: acc.accountID, name: acc.name)
-        } label: {
-            HStack(alignment: .center, spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(acc.color.opacity(0.15))
-                        .frame(width: 28, height: 28)
-                    Image(systemName: acc.iconName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(acc.color)
-                }
-
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(acc.name)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-
-                        Text("\(acc.holdingCount)项")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-
-                        Spacer(minLength: 4)
-
-                        Text(Formatters.currency(acc.totalAmount, hidden: refreshStore.hideAmounts, compact: acc.totalAmount >= 1_000_000))
-                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(.primary)
-                    }
-
-                    HStack {
-                        Text("占比 \(Formatters.percentPoints(acc.netWorthRatioPercent))")
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if acc.investableAmount > 0 && acc.fixedAmount > 0 {
-                            Text("投资 \(Formatters.wholeCurrency(acc.investableAmount, hidden: refreshStore.hideAmounts)) · 固定 \(Formatters.wholeCurrency(acc.fixedAmount, hidden: refreshStore.hideAmounts))")
-                                .foregroundStyle(.tertiary)
-                        } else if !acc.subtitle.isEmpty {
-                            Text(acc.subtitle)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .font(.caption2)
-                    .monospacedDigit()
-
-                    GeometryReader { geo in
-                        let width = max(geo.size.width, 1)
-                        let fraction = min(max(acc.netWorthRatioPercent / 100.0, 0), 1)
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(Color(.tertiarySystemFill))
-                                .frame(height: 4)
-                            if fraction > 0 {
-                                Capsule()
-                                    .fill(acc.color)
-                                    .frame(width: max(width * fraction, 3), height: 4)
-                            }
-                        }
-                    }
-                    .frame(height: 4)
-                }
-
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.quaternary)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            .background(isHighlighted ? acc.color.opacity(0.08) : Color.clear)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - 极简空状态引导
@@ -686,7 +541,7 @@ struct OverviewView: View {
                         .font(.footnote.weight(.medium))
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TactilePressButtonStyle(pressedScale: 0.96))
                 .foregroundStyle(Color.accentColor)
             }
         }

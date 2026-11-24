@@ -189,7 +189,7 @@ struct CategoryListView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 Haptics.lightImpact()
@@ -227,6 +227,7 @@ struct CategoryListView: View {
 struct CategoryEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetCategory.sortOrder) private var allCategories: [AssetCategory]
     @Query private var allHoldings: [AssetHolding]
@@ -276,6 +277,19 @@ struct CategoryEditorSheet: View {
         return !name.isEmpty || enableTargetRatio
     }
 
+    private var currentInvestableTotal: Double {
+        allHoldings.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
+    }
+
+    private var previewTargetAmount: Double? {
+        guard pool == .investable, enableTargetRatio,
+              currentInvestableTotal > 0,
+              let pct = Formatters.parseDouble(targetRatioText), pct > 0 else {
+            return nil
+        }
+        return currentInvestableTotal * (min(pct, 100) / 100.0)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -283,7 +297,7 @@ struct CategoryEditorSheet: View {
                     TextField("类别名称（如：海外指数、定期存单）", text: $name)
                         .focused($focusedField, equals: .name)
 
-                    Picker("资金池归属", selection: $pool) {
+                    Picker("资金池归属", selection: $pool.animation(Motion.standard(reduceMotion: reduceMotion))) {
                         ForEach(AssetPool.allCases) { option in
                             Text(option.title).tag(option)
                         }
@@ -300,7 +314,7 @@ struct CategoryEditorSheet: View {
 
                 if pool == .investable {
                     Section {
-                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio)
+                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio.animation(Motion.standard(reduceMotion: reduceMotion)))
 
                         if enableTargetRatio {
                             HStack {
@@ -315,10 +329,25 @@ struct CategoryEditorSheet: View {
                                     .foregroundStyle(.secondary)
                             }
 
+                            if let previewAmt = previewTargetAmount {
+                                HStack {
+                                    Text("折合参考金额")
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(Formatters.wholeCurrency(previewAmt))
+                                        .font(.subheadline.weight(.semibold))
+                                        .monospacedDigit()
+                                        .contentTransition(.numericText(value: previewAmt))
+                                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: previewAmt)
+                                }
+                            }
+
                             if let remaining = remainingTargetRatio {
                                 Button {
                                     Haptics.selection()
-                                    targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
+                                    withAnimation(Motion.numeric(reduceMotion: reduceMotion)) {
+                                        targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
+                                    }
                                 } label: {
                                     Label("一键填入剩余 \(Formatters.percentPoints(remaining, digits: 1))", systemImage: "wand.and.stars")
                                         .font(.caption.weight(.medium))
@@ -327,28 +356,37 @@ struct CategoryEditorSheet: View {
                         }
                     } header: {
                         Text("目标比例（可选）")
+                    } footer: {
+                        if enableTargetRatio && currentInvestableTotal > 0 {
+                            Text("按当前投资资产 \(Formatters.wholeCurrency(currentInvestableTotal)) 实时折算。")
+                        }
                     }
                 }
 
                 Section("标识颜色") {
                     LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(CategoryColorToken.allCases) { token in
+                            let selected = (colorToken == token)
                             Button {
                                 Haptics.selection()
-                                colorToken = token
+                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
+                                    colorToken = token
+                                }
                             } label: {
                                 ZStack {
                                     Circle()
                                         .fill(token.color)
                                         .frame(width: 34, height: 34)
-                                    if colorToken == token {
+                                        .scaleEffect(selected && !reduceMotion ? 1.08 : 1.0)
+                                    if selected {
                                         Image(systemName: "checkmark")
                                             .font(.caption.weight(.bold))
                                             .foregroundStyle(.white)
+                                            .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
                                     }
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
                         }
                     }
                     .padding(.vertical, 6)
@@ -357,20 +395,24 @@ struct CategoryEditorSheet: View {
                 Section("图标") {
                     LazyVGrid(columns: iconColumns, spacing: 12) {
                         ForEach(PresetIcons.categoryIcons, id: \.self) { symbol in
+                            let selected = (iconName == symbol)
                             Button {
                                 Haptics.selection()
-                                iconName = symbol
+                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
+                                    iconName = symbol
+                                }
                             } label: {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(iconName == symbol ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
+                                        .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
                                         .frame(width: 40, height: 40)
                                     Image(systemName: symbol)
                                         .font(.callout.weight(.semibold))
-                                        .foregroundStyle(iconName == symbol ? colorToken.color : .secondary)
+                                        .foregroundStyle(selected ? colorToken.color : .secondary)
                                 }
+                                .scaleEffect(selected && !reduceMotion ? 1.05 : 1.0)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.92))
                         }
                     }
                     .padding(.vertical, 6)

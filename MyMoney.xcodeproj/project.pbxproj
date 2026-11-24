@@ -19,7 +19,6 @@
 		8B1F822980C9D141836796C9 /* PortfolioRefreshStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CA27140C54E08A1EDF2125 /* PortfolioRefreshStore.swift */; };
 		83594D47E53A4BF1CF975EFD /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DF4560010A79FA6DF0E0019 /* RootTabView.swift */; };
 		21B64826EF08EEBA9539A873 /* OverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 838E70BC6D8C963F7BFCB688 /* OverviewView.swift */; };
-		4B56C568F58E789B224FA4FE /* AllocationChartSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E7648EC3C98DF673B736EA /* AllocationChartSection.swift */; };
 		7A203EAEA4B60D06862CCBED /* HoldingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43D8A43DE2F63FCDE49C8DF3 /* HoldingsView.swift */; };
 		E84C8306F483B893B875B104 /* HoldingRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2F834F0B81FA4685886BDBB /* HoldingRowView.swift */; };
 		E319AAEFBC4E01B7938D64BC /* QuickAdjustHoldingSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94BC3744FBADAA01CC888A54 /* QuickAdjustHoldingSheet.swift */; };
@@ -29,6 +28,7 @@
 		90CB6C543C2357D606D2FDB3 /* AccountListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71BC067F0D97347F4B6E3486 /* AccountListView.swift */; };
 		3BDDB470C3813DECE493B85F /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB4FD371F112C8146196DB07 /* Formatters.swift */; };
 		2935553BB02D88DDF1DB1062 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5F912643473ABE9F722736C /* Haptics.swift */; };
+		C8247499107CF44A2658C6E8 /* Motion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BBDB7A7E752C50C03B8D4D3 /* Motion.swift */; };
 		9C29ADDC1EB1880422072542 /* ToastBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B40A44A23BC0D44DC625E44 /* ToastBannerView.swift */; };
 		B8AC1D188E57AAA305899A40 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = FCB24FEA60EE0B8304C26869 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -47,7 +47,6 @@
 		C9CA27140C54E08A1EDF2125 /* PortfolioRefreshStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioRefreshStore.swift; sourceTree = "<group>"; };
 		6DF4560010A79FA6DF0E0019 /* RootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootTabView.swift; sourceTree = "<group>"; };
 		838E70BC6D8C963F7BFCB688 /* OverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewView.swift; sourceTree = "<group>"; };
-		F4E7648EC3C98DF673B736EA /* AllocationChartSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AllocationChartSection.swift; sourceTree = "<group>"; };
 		43D8A43DE2F63FCDE49C8DF3 /* HoldingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldingsView.swift; sourceTree = "<group>"; };
 		F2F834F0B81FA4685886BDBB /* HoldingRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoldingRowView.swift; sourceTree = "<group>"; };
 		94BC3744FBADAA01CC888A54 /* QuickAdjustHoldingSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickAdjustHoldingSheet.swift; sourceTree = "<group>"; };
@@ -57,6 +56,7 @@
 		71BC067F0D97347F4B6E3486 /* AccountListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountListView.swift; sourceTree = "<group>"; };
 		BB4FD371F112C8146196DB07 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
 		A5F912643473ABE9F722736C /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
+		9BBDB7A7E752C50C03B8D4D3 /* Motion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Motion.swift; sourceTree = "<group>"; };
 		1B40A44A23BC0D44DC625E44 /* ToastBannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastBannerView.swift; sourceTree = "<group>"; };
 		FCB24FEA60EE0B8304C26869 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B714AE17F5D767B2D922EC4C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -77,7 +77,6 @@
 			isa = PBXGroup;
 			children = (
 				838E70BC6D8C963F7BFCB688 /* OverviewView.swift */,
-				F4E7648EC3C98DF673B736EA /* AllocationChartSection.swift */,
 			);
 			path = Overview;
 			sourceTree = "<group>";
@@ -108,6 +107,7 @@
 			children = (
 				BB4FD371F112C8146196DB07 /* Formatters.swift */,
 				A5F912643473ABE9F722736C /* Haptics.swift */,
+				9BBDB7A7E752C50C03B8D4D3 /* Motion.swift */,
 				1B40A44A23BC0D44DC625E44 /* ToastBannerView.swift */,
 			);
 			path = Components;
@@ -283,7 +283,6 @@
 				8B1F822980C9D141836796C9 /* PortfolioRefreshStore.swift in Sources */,
 				83594D47E53A4BF1CF975EFD /* RootTabView.swift in Sources */,
 				21B64826EF08EEBA9539A873 /* OverviewView.swift in Sources */,
-				4B56C568F58E789B224FA4FE /* AllocationChartSection.swift in Sources */,
 				7A203EAEA4B60D06862CCBED /* HoldingsView.swift in Sources */,
 				E84C8306F483B893B875B104 /* HoldingRowView.swift in Sources */,
 				E319AAEFBC4E01B7938D64BC /* QuickAdjustHoldingSheet.swift in Sources */,
@@ -293,6 +292,7 @@
 				90CB6C543C2357D606D2FDB3 /* AccountListView.swift in Sources */,
 				3BDDB470C3813DECE493B85F /* Formatters.swift in Sources */,
 				2935553BB02D88DDF1DB1062 /* Haptics.swift in Sources */,
+				C8247499107CF44A2658C6E8 /* Motion.swift in Sources */,
 				9C29ADDC1EB1880422072542 /* ToastBannerView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

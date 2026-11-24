@@ -10,12 +10,13 @@ enum PoolFilterOption: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// 分组渲染载体
+/// 分组渲染载体（按账户与按类别对齐展示比例、双池拆分与小计）
 private struct HoldingGroupSection: Identifiable {
     let id: String
     let title: String
     let badgeText: String?
-    let subtitleText: String?
+    let ratioText: String?
+    let secondaryNote: String?
     let subtotal: Double
     let category: AssetCategory?
     let account: AssetAccount?
@@ -31,10 +32,11 @@ private struct CreateHoldingRequest: Identifiable {
 }
 
 /// Tab 2：资产明细与对账工作台
-/// - 导航栏内置「按类别 / 按账户」切换，省去冗长大标题与多余分段占位
-/// - 紧凑分组间距 + 分组头直显目标金额差额与快捷「+」
+/// - 默认按账户展示，分组头完整对齐账户占比（占总净值/当前筛选池比例）及混合账户的投资/固定拆分
+/// - 统一使用 Motion 物理曲线、固定占位刷新图标、平滑数值滚动与轻按反馈
 struct HoldingsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
 
     @Query(sort: \AssetHolding.sortOrder) private var holdings: [AssetHolding]
@@ -65,8 +67,25 @@ struct HoldingsView: View {
         holdings.contains { $0.supportsQuoteRefresh }
     }
 
+    private var totalNetWorth: Double {
+        holdings.reduce(0.0) { $0 + $1.marketValue }
+    }
+
     private var investableTotal: Double {
         holdings.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
+    }
+
+    private var fixedTotal: Double {
+        holdings.filter { $0.effectivePool == .fixed }.reduce(0.0) { $0 + $1.marketValue }
+    }
+
+    /// 按当前资金池筛选口径确定账户占比分母（不受搜索关键词扭曲）
+    private var accountRatioDenominator: Double {
+        switch refreshStore.holdingsPoolFilter {
+        case .all: return totalNetWorth
+        case .investable: return investableTotal
+        case .fixed: return fixedTotal
+        }
     }
 
     private var filteredHoldings: [AssetHolding] {
@@ -101,10 +120,10 @@ struct HoldingsView: View {
 
     private var groupedSections: [HoldingGroupSection] {
         switch refreshStore.holdingsGroupMode {
-        case .byCategory:
-            return buildCategorySections()
         case .byAccount:
             return buildAccountSections()
+        case .byCategory:
+            return buildCategorySections()
         }
     }
 
@@ -131,7 +150,7 @@ struct HoldingsView: View {
                     .background(Color(.systemGroupedBackground))
                 } else {
                     List {
-                        // 仅在同时存在双资金池且未下钻时展示精简的一行胶囊筛选
+                        // 仅在同时存在双资金池且未下钻时展示一行紧凑胶囊筛选
                         if hasBothPools && refreshStore.activeDrilldown == nil {
                             Section {
                                 HStack(spacing: 6) {
@@ -139,10 +158,13 @@ struct HoldingsView: View {
                                         filterChip(opt)
                                     }
                                     Spacer()
-                                    Text(Formatters.currency(filteredHoldings.reduce(0) { $0 + $1.marketValue }, hidden: refreshStore.hideAmounts, compact: true))
+                                    let visibleSum = filteredHoldings.reduce(0.0) { $0 + $1.marketValue }
+                                    Text(Formatters.currency(visibleSum, hidden: refreshStore.hideAmounts, compact: true))
                                         .font(.caption.weight(.medium))
                                         .monospacedDigit()
                                         .foregroundStyle(.secondary)
+                                        .contentTransition(.numericText(value: visibleSum))
+                                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: visibleSum)
                                 }
                             }
                             .listRowBackground(Color.clear)
@@ -159,8 +181,10 @@ struct HoldingsView: View {
                                     if refreshStore.activeDrilldown != nil || refreshStore.holdingsPoolFilter != .all || !searchText.isEmpty {
                                         Button("显示全部资产") {
                                             Haptics.selection()
-                                            searchText = ""
-                                            refreshStore.clearDrilldown()
+                                            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
+                                                searchText = ""
+                                                refreshStore.clearDrilldown()
+                                            }
                                         }
                                         .buttonStyle(.bordered)
                                     }
@@ -182,7 +206,7 @@ struct HoldingsView: View {
                                                 pnlColorScheme: refreshStore.pnlColorScheme
                                             )
                                         }
-                                        .buttonStyle(.plain)
+                                        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
                                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                             if item.supportsQuoteRefresh {
                                                 Button {
@@ -220,6 +244,9 @@ struct HoldingsView: View {
                     }
                     .listStyle(.insetGrouped)
                     .listSectionSpacing(.compact)
+                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.holdingsGroupMode)
+                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.holdingsPoolFilter)
+                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.activeDrilldown)
                     .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索名称、代码或账户")
                     .refreshable {
                         if hasRefreshableHoldings {
@@ -231,11 +258,10 @@ struct HoldingsView: View {
             .navigationTitle(refreshStore.activeDrilldown?.label ?? "资产")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // 左上角：下钻时显示「全部」一键返回；常规状态与总览页保持一致放隐私眼睛
                 ToolbarItem(placement: .topBarLeading) {
                     if refreshStore.activeDrilldown != nil {
                         Button {
-                            withAnimation(.snappy) {
+                            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
                                 refreshStore.clearDrilldown()
                             }
                         } label: {
@@ -245,19 +271,13 @@ struct HoldingsView: View {
                                 Text("全部")
                             }
                         }
+                        .transition(.opacity)
                     } else if !holdings.isEmpty {
-                        Button {
-                            Haptics.selection()
-                            refreshStore.hideAmounts.toggle()
-                        } label: {
-                            Image(systemName: refreshStore.hideAmounts ? "eye.slash" : "eye")
-                                .font(.subheadline)
-                        }
-                        .accessibilityLabel(refreshStore.hideAmounts ? "显示金额" : "隐藏金额")
+                        PrivacyToggleButton(hideAmounts: $bindableStore.hideAmounts)
+                            .transition(.opacity)
                     }
                 }
 
-                // 中央：有资产且非下钻时，直接内置「按类别 / 按账户」原生分段切换（省去一整块页面空间）
                 if !holdings.isEmpty && refreshStore.activeDrilldown == nil {
                     ToolbarItem(placement: .principal) {
                         Picker("分组维度", selection: $bindableStore.holdingsGroupMode) {
@@ -274,21 +294,13 @@ struct HoldingsView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 14) {
+                    HStack(spacing: 12) {
                         if hasRefreshableHoldings {
-                            Button {
+                            RefreshToolbarButton(isRefreshing: refreshStore.isRefreshing) {
                                 Task {
                                     await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext, silent: false)
                                 }
-                            } label: {
-                                if refreshStore.isRefreshing {
-                                    ProgressView()
-                                } else {
-                                    Image(systemName: "arrow.clockwise")
-                                }
                             }
-                            .disabled(refreshStore.isRefreshing)
-                            .accessibilityLabel("刷新行情")
                         }
 
                         Button {
@@ -298,6 +310,7 @@ struct HoldingsView: View {
                         } label: {
                             Image(systemName: "plus")
                                 .fontWeight(.semibold)
+                                .frame(width: 24, height: 24)
                         }
                         .accessibilityLabel("新增资产")
                     }
@@ -354,7 +367,7 @@ struct HoldingsView: View {
         let selected = refreshStore.holdingsPoolFilter == option
         return Button {
             Haptics.selection()
-            withAnimation(.snappy) {
+            withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
                 if selected && option != .all {
                     refreshStore.holdingsPoolFilter = .all
                 } else {
@@ -372,60 +385,124 @@ struct HoldingsView: View {
                     in: Capsule()
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.94))
     }
 
     private func sectionHeader(_ section: HoldingGroupSection) -> some View {
-        HStack(alignment: .center, spacing: 5) {
-            Text(section.title)
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.primary)
-                .textCase(nil)
-
-            if let badge = section.badgeText {
-                Text(badge)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .center, spacing: 5) {
+                Text(section.title)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
                     .textCase(nil)
-            }
 
-            if let sub = section.subtitleText {
-                Text(sub)
-                    .font(.caption2)
+                if let badge = section.badgeText {
+                    Text(badge)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
+                }
+
+                if let ratio = section.ratioText {
+                    Text(ratio)
+                        .font(.caption2.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .textCase(nil)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                Text(Formatters.currency(section.subtotal, hidden: refreshStore.hideAmounts, compact: section.subtotal >= 1_000_000))
+                    .font(.caption.weight(.semibold))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .textCase(nil)
-                    .lineLimit(1)
+                    .contentTransition(.numericText(value: section.subtotal))
+                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: section.subtotal)
+
+                if section.category != nil || section.account != nil {
+                    Button {
+                        Haptics.lightImpact()
+                        createRequest = CreateHoldingRequest(
+                            category: section.category,
+                            account: section.account,
+                            pool: section.category?.pool ?? .investable
+                        )
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(Color.accentColor.opacity(0.85))
+                    }
+                    .buttonStyle(TactilePressButtonStyle(pressedScale: 0.88))
+                    .accessibilityLabel("在\(section.title)下新增资产")
+                }
             }
 
-            Spacer(minLength: 4)
-
-            Text(Formatters.currency(section.subtotal, hidden: refreshStore.hideAmounts, compact: section.subtotal >= 1_000_000))
-                .font(.caption.weight(.semibold))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-
-            if section.category != nil || section.account != nil {
-                Button {
-                    Haptics.lightImpact()
-                    createRequest = CreateHoldingRequest(
-                        category: section.category,
-                        account: section.account,
-                        pool: section.category?.pool ?? .investable
-                    )
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.footnote)
-                        .foregroundStyle(Color.accentColor.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("在\(section.title)下新增资产")
+            if let secondaryNote = section.secondaryNote {
+                Text(secondaryNote)
+                    .font(.system(size: 10.5))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+                    .textCase(nil)
             }
         }
     }
 
-    // MARK: - 分组组装
+    // MARK: - 分组组装（账户占比与类别占比完全对齐）
+
+    private func buildAccountSections() -> [HoldingGroupSection] {
+        var result: [HoldingGroupSection] = []
+        let denom = accountRatioDenominator
+
+        for acc in accounts {
+            let items = filteredHoldings.filter { $0.account?.id == acc.id }
+            guard !items.isEmpty else { continue }
+            let sum = items.reduce(0.0) { $0 + $1.marketValue }
+            let pctText: String? = denom > 0 ? Formatters.percentPoints((sum / denom) * 100.0) : nil
+
+            let invAmt = items.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
+            let fixAmt = items.filter { $0.effectivePool == .fixed }.reduce(0.0) { $0 + $1.marketValue }
+            let splitNote: String? = (refreshStore.holdingsPoolFilter == .all && invAmt > 0 && fixAmt > 0)
+                ? "投资 \(Formatters.wholeCurrency(invAmt, hidden: refreshStore.hideAmounts)) · 固定 \(Formatters.wholeCurrency(fixAmt, hidden: refreshStore.hideAmounts))"
+                : nil
+
+            result.append(
+                HoldingGroupSection(
+                    id: "acc-\(acc.id.uuidString)",
+                    title: acc.name,
+                    badgeText: nil,
+                    ratioText: pctText,
+                    secondaryNote: splitNote,
+                    subtotal: sum,
+                    category: nil,
+                    account: acc,
+                    items: items
+                )
+            )
+        }
+
+        let unassigned = filteredHoldings.filter { $0.account == nil }
+        if !unassigned.isEmpty {
+            let sum = unassigned.reduce(0.0) { $0 + $1.marketValue }
+            let pctText: String? = denom > 0 ? Formatters.percentPoints((sum / denom) * 100.0) : nil
+            result.append(
+                HoldingGroupSection(
+                    id: "acc-none",
+                    title: "未指定账户",
+                    badgeText: nil,
+                    ratioText: pctText,
+                    secondaryNote: nil,
+                    subtotal: sum,
+                    category: nil,
+                    account: nil,
+                    items: unassigned
+                )
+            )
+        }
+        return result
+    }
 
     private func buildCategorySections() -> [HoldingGroupSection] {
         var result: [HoldingGroupSection] = []
@@ -449,6 +526,8 @@ struct HoldingsView: View {
                 } else {
                     ratioNote = Formatters.percentPoints(actualPct)
                 }
+            } else if cat.pool == .fixed && totalNetWorth > 0 {
+                ratioNote = "占总净值 \(Formatters.percentPoints((sum / totalNetWorth) * 100.0))"
             }
 
             result.append(
@@ -456,7 +535,8 @@ struct HoldingsView: View {
                     id: "cat-\(cat.id.uuidString)",
                     title: cat.name,
                     badgeText: cat.pool == .fixed ? "固定" : nil,
-                    subtitleText: ratioNote,
+                    ratioText: ratioNote,
+                    secondaryNote: nil,
                     subtotal: sum,
                     category: cat,
                     account: nil,
@@ -467,54 +547,19 @@ struct HoldingsView: View {
 
         let uncategorized = filteredHoldings.filter { $0.category == nil }
         if !uncategorized.isEmpty {
+            let sum = uncategorized.reduce(0.0) { $0 + $1.marketValue }
+            let pctText: String? = totalNetWorth > 0 ? Formatters.percentPoints((sum / totalNetWorth) * 100.0) : nil
             result.append(
                 HoldingGroupSection(
                     id: "cat-none",
                     title: "未分类",
                     badgeText: nil,
-                    subtitleText: nil,
-                    subtotal: uncategorized.reduce(0.0) { $0 + $1.marketValue },
+                    ratioText: pctText,
+                    secondaryNote: nil,
+                    subtotal: sum,
                     category: nil,
                     account: nil,
                     items: uncategorized
-                )
-            )
-        }
-        return result
-    }
-
-    private func buildAccountSections() -> [HoldingGroupSection] {
-        var result: [HoldingGroupSection] = []
-        for acc in accounts {
-            let items = filteredHoldings.filter { $0.account?.id == acc.id }
-            guard !items.isEmpty else { continue }
-            let sum = items.reduce(0.0) { $0 + $1.marketValue }
-            result.append(
-                HoldingGroupSection(
-                    id: "acc-\(acc.id.uuidString)",
-                    title: acc.name,
-                    badgeText: nil,
-                    subtitleText: nil,
-                    subtotal: sum,
-                    category: nil,
-                    account: acc,
-                    items: items
-                )
-            )
-        }
-
-        let unassigned = filteredHoldings.filter { $0.account == nil }
-        if !unassigned.isEmpty {
-            result.append(
-                HoldingGroupSection(
-                    id: "acc-none",
-                    title: "未指定账户",
-                    badgeText: nil,
-                    subtitleText: nil,
-                    subtotal: unassigned.reduce(0.0) { $0 + $1.marketValue },
-                    category: nil,
-                    account: nil,
-                    items: unassigned
                 )
             )
         }

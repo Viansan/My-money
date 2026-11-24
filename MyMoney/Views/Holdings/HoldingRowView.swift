@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 持仓页分组维度
+/// 持仓页分组维度（默认按账户，左起第一项）
 enum HoldingsGroupMode: String, CaseIterable, Identifiable {
     case byAccount = "按账户"
     case byCategory = "按类别"
@@ -8,8 +8,10 @@ enum HoldingsGroupMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// 单条资产列表行视图
+/// 单条资产列表行视图（带平滑数值滚动，单条刷价或改数后金额自然过渡）
 struct HoldingRowView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let holding: AssetHolding
     let groupMode: HoldingsGroupMode
     let hideAmounts: Bool
@@ -93,17 +95,21 @@ struct HoldingRowView: View {
                     .font(.system(.subheadline, design: .rounded, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
+                    .contentTransition(.numericText(value: holding.marketValue))
+                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: holding.marketValue)
 
                 if holding.valuationMode.usesSharesAndPrice {
                     Text("\(Formatters.shares(holding.shares, hidden: hideAmounts)) × \(Formatters.unitPrice(holding.latestPrice))")
                         .font(.caption2)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
+                        .contentTransition(.numericText(value: holding.latestPrice))
                 }
 
                 if let pnl = holding.profitLoss {
                     HStack(spacing: 3) {
                         Text(Formatters.signedCurrency(pnl, hidden: hideAmounts))
+                            .contentTransition(.numericText(value: pnl))
                         if let rate = holding.profitLossRate {
                             Text("(\(Formatters.signedRate(rate, hidden: hideAmounts)))")
                         }
@@ -111,6 +117,7 @@ struct HoldingRowView: View {
                     .font(.caption2.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(pnlColorScheme.color(for: pnl))
+                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
                 }
             }
         }

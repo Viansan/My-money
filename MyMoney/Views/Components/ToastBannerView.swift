@@ -20,11 +20,15 @@ struct AppToast: Identifiable, Equatable {
     }
 }
 
-/// 浮层 Toast 视图（位于 TabBar 上方，绝不打断用户当前操作）
+/// 浮层 Toast 视图（位于 TabBar 上方，支持跟手向下轻扫关闭，绝不打断用户当前操作）
 struct ToastBannerView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     let toast: AppToast
     let onAction: (() -> Void)?
     let onDismiss: () -> Void
+
+    @State private var dragOffsetY: CGFloat = 0
 
     private var iconName: String {
         switch toast.style {
@@ -48,6 +52,7 @@ struct ToastBannerView: View {
                 Image(systemName: iconName)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(iconColor)
+                    .contentTransition(.symbolEffect(.replace))
 
                 Text(toast.message)
                     .font(.subheadline.weight(.medium))
@@ -63,7 +68,7 @@ struct ToastBannerView: View {
                     }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
-                    .buttonStyle(.plain)
+                    .buttonStyle(TactilePressButtonStyle(pressedScale: 0.94))
                 }
 
                 Button {
@@ -74,7 +79,7 @@ struct ToastBannerView: View {
                         .foregroundStyle(.secondary)
                         .padding(4)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
             }
 
             if !toast.details.isEmpty {
@@ -96,6 +101,7 @@ struct ToastBannerView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .frame(maxWidth: 540)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -103,6 +109,29 @@ struct ToastBannerView: View {
         )
         .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 4)
         .padding(.horizontal, 16)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .offset(y: dragOffsetY)
+        .opacity(dragOffsetY > 0 ? max(1.0 - Double(dragOffsetY / 90.0), 0.25) : 1.0)
+        .gesture(
+            DragGesture(minimumDistance: 6, coordinateSpace: .local)
+                .onChanged { value in
+                    let dy = value.translation.height
+                    // 向下跟手滑动，向上轻阻尼回弹
+                    dragOffsetY = dy >= 0 ? dy : dy * 0.22
+                }
+                .onEnded { value in
+                    if value.translation.height > 28 || value.predictedEndTranslation.height > 60 {
+                        onDismiss()
+                    } else {
+                        withAnimation(Motion.overlay(reduceMotion: reduceMotion)) {
+                            dragOffsetY = 0
+                        }
+                    }
+                }
+        )
+        .transition(
+            reduceMotion
+                ? .opacity
+                : .move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.96))
+        )
     }
 }

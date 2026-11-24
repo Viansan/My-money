@@ -147,268 +147,343 @@ struct QuickAdjustHoldingSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                // 实时估值与变化量预览
-                Section {
-                    HStack(alignment: .center) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(holding.name)
-                                .font(.headline)
-                            HStack(spacing: 6) {
-                                if let catName = holding.category?.name {
-                                    Text(catName)
-                                }
-                                if let accName = holding.account?.name {
-                                    Text("· \(accName)")
-                                }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                            if hasFixedDepositMeta {
-                                HStack(spacing: 4) {
-                                    if let rate = holding.annualRate, rate > 0 {
-                                        Text("年化 \(Formatters.annualRate(rate))")
+            ScrollView {
+                VStack(spacing: 16) {
+                    // 实时估值与变化量预览
+                    GroupedFormSection {
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(holding.name)
+                                    .font(.headline)
+                                HStack(spacing: 6) {
+                                    if let catName = holding.category?.name {
+                                        Text(catName)
                                     }
-                                    if let mat = holding.maturityDate {
-                                        Text("\(holding.annualRate != nil ? "· " : "")\(Formatters.dateYMD(mat)) 到期")
+                                    if let accName = holding.account?.name {
+                                        Text("· \(accName)")
                                     }
                                 }
-                                .font(.caption2)
-                                .monospacedDigit()
-                                .foregroundStyle(holding.isMaturitySoonOrPast ? Color.orange : Color.secondary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                                if hasFixedDepositMeta {
+                                    HStack(spacing: 4) {
+                                        if let rate = holding.annualRate, rate > 0 {
+                                            Text("年化 \(Formatters.annualRate(rate))")
+                                        }
+                                        if let mat = holding.maturityDate {
+                                            Text("\(holding.annualRate != nil ? "· " : "")\(Formatters.dateYMD(mat)) 到期")
+                                        }
+                                    }
+                                    .font(.caption2)
+                                    .monospacedDigit()
+                                    .foregroundStyle(holding.isMaturitySoonOrPast ? Color.orange : Color.secondary)
+                                }
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(Formatters.currency(previewMarketValue))
+                                    .font(.system(.title3, design: .rounded, weight: .bold))
+                                    .monospacedDigit()
+
+                                if abs(valueChangeDelta) >= 0.01 {
+                                    Text("变动 \(Formatters.signedCurrency(valueChangeDelta))")
+                                        .font(.caption.weight(.semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(Color.accentColor)
+                                } else if let interestText = previewDepositInterestText {
+                                    Text(interestText)
+                                        .font(.caption.weight(.medium))
+                                        .monospacedDigit()
+                                        .foregroundStyle(CategoryColorToken.amber.color)
+                                } else if let cost = previewTotalCost {
+                                    let pnl = previewMarketValue - cost
+                                    Text("盈亏 \(Formatters.signedCurrency(pnl))")
+                                        .font(.caption.weight(.medium))
+                                        .monospacedDigit()
+                                        .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
+                                }
                             }
                         }
-
-                        Spacer()
-
-                        VStack(alignment: .trailing, spacing: 4) {
-                            Text(Formatters.currency(previewMarketValue))
-                                .font(.system(.title3, design: .rounded, weight: .bold))
-                                .monospacedDigit()
-
-                            if abs(valueChangeDelta) >= 0.01 {
-                                Text("变动 \(Formatters.signedCurrency(valueChangeDelta))")
-                                    .font(.caption.weight(.semibold))
-                                    .monospacedDigit()
-                                    .foregroundStyle(Color.accentColor)
-                            } else if let interestText = previewDepositInterestText {
-                                Text(interestText)
-                                    .font(.caption.weight(.medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(CategoryColorToken.amber.color)
-                            } else if let cost = previewTotalCost {
-                                let pnl = previewMarketValue - cost
-                                Text("盈亏 \(Formatters.signedCurrency(pnl))")
-                                    .font(.caption.weight(.medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
-                            }
-                        }
-                    }
-                }
-
-                // 核心数量 / 金额调整
-                Section {
-                    Picker("修改方式", selection: $adjustStyle) {
-                        ForEach(AdjustStyle.allCases) { style in
-                            Text(style.rawValue).tag(style)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: adjustStyle) { _, _ in
-                        Haptics.selection()
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
 
-                    if adjustStyle == .replaceTotal {
-                        HStack(spacing: 6) {
-                            Text(usesShares ? "最新持有份额" : (isFixedAsset ? "存款金额（元）" : "最新总金额（元）"))
-                            if !usesShares {
-                                AmountUnitBadge(text: primaryNumberText)
-                            }
-                            Spacer(minLength: 8)
-                            TextField("0", text: $primaryNumberText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                        }
-                    } else {
-                        Picker("变动方向", selection: $deltaDirection) {
-                            ForEach(DeltaDirection.allCases) { dir in
-                                Text(dir.rawValue).tag(dir)
+                    // 核心数量 / 金额调整
+                    GroupedFormSection(header: usesShares ? "份额与单价" : (isFixedAsset ? "存款金额" : "当前金额")) {
+                        Picker("修改方式", selection: $adjustStyle) {
+                            ForEach(AdjustStyle.allCases) { style in
+                                Text(style.rawValue).tag(style)
                             }
                         }
                         .pickerStyle(.segmented)
-                        .onChange(of: deltaDirection) { _, _ in
+                        .onChange(of: adjustStyle) { _, _ in
                             Haptics.selection()
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
 
-                        HStack(spacing: 6) {
-                            Text(usesShares ? "本次变动份额" : "本次变动金额")
-                            if !usesShares {
-                                AmountUnitBadge(text: deltaNumberText)
-                            }
-                            Spacer(minLength: 8)
-                            TextField(usesShares ? "输入份数" : "输入金额", text: $deltaNumberText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                        }
+                        GroupedFormDivider()
 
-                        // 一键步进胶囊（常用加仓/入账直接点）
-                        HStack(spacing: 8) {
-                            ForEach(quickStepPresets, id: \.label) { preset in
-                                Button {
-                                    Haptics.selection()
-                                    let current = parsedDeltaNumber
-                                    deltaNumberText = Formatters.editableDecimal(current + preset.amount, maxDecimals: 2)
-                                } label: {
-                                    Text("\(deltaDirection == .add ? "+" : "-")\(preset.label)")
-                                        .font(.caption.weight(.medium))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 5)
-                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                        if adjustStyle == .replaceTotal {
+                            HStack(spacing: 6) {
+                                Text(usesShares ? "最新持有份额" : (isFixedAsset ? "存款金额（元）" : "最新总金额（元）"))
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                                if !usesShares {
+                                    AmountUnitBadge(text: primaryNumberText)
                                 }
-                                .buttonStyle(.plain)
+                                TextField("0", text: $primaryNumberText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, minHeight: 24)
                             }
-
-                            Spacer()
-
-                            Button("清零") {
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+                        } else {
+                            Picker("变动方向", selection: $deltaDirection) {
+                                ForEach(DeltaDirection.allCases) { dir in
+                                    Text(dir.rawValue).tag(dir)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: deltaDirection) { _, _ in
                                 Haptics.selection()
-                                deltaNumberText = ""
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .buttonStyle(.plain)
-                            .opacity(parsedDeltaNumber > 0 ? 1 : 0)
-                            .disabled(parsedDeltaNumber <= 0)
-                        }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
 
-                        HStack {
-                            Text(usesShares ? "调整后总份额" : "调整后总金额")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(usesShares ? Formatters.shares(previewSharesOrAmount) : Formatters.currency(previewSharesOrAmount))
-                                .font(.subheadline.weight(.semibold))
-                                .monospacedDigit()
-                        }
-                    }
+                            GroupedFormDivider()
 
-                    if usesShares {
-                        HStack(spacing: 10) {
-                            Text(holding.valuationMode.priceFieldLabel)
-                            Spacer()
-                            TextField("单价", text: $unitPriceText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-
-                            if holding.supportsQuoteRefresh {
-                                Button {
-                                    Task { await fetchLatestQuote() }
-                                } label: {
-                                    ZStack {
-                                        if isFetchingQuote {
-                                            ProgressView()
-                                                .controlSize(.small)
-                                        } else {
-                                            Label("拉现价", systemImage: "arrow.clockwise")
-                                                .labelStyle(.titleAndIcon)
-                                                .font(.caption.weight(.semibold))
-                                        }
-                                    }
-                                    .frame(minWidth: 62, minHeight: 18)
+                            HStack(spacing: 6) {
+                                Text(usesShares ? "本次变动份额" : "本次变动金额")
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                                if !usesShares {
+                                    AmountUnitBadge(text: deltaNumberText)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                                .disabled(isFetchingQuote)
+                                TextField(usesShares ? "输入份数" : "输入金额", text: $deltaNumberText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, minHeight: 24)
                             }
-                        }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                        if let quoteErrorMessage {
-                            Text(quoteErrorMessage)
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                } header: {
-                    Text(usesShares ? "份额与单价" : (isFixedAsset ? "存款金额" : "当前金额"))
-                }
+                            GroupedFormDivider()
 
-                // 选填成本调整（固定资产若未记录成本则不打扰）
-                if !isFixedAsset || holding.totalCost != nil {
-                    Section {
-                        Toggle("记录投入成本（算盈亏）", isOn: $trackCost)
-
-                        if trackCost {
-                            if adjustStyle == .deltaChange {
-                                HStack(spacing: 6) {
-                                    Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
-                                    AmountUnitBadge(text: deltaPrincipalText)
-                                    Spacer(minLength: 8)
-                                    TextField("不填保持原成本", text: $deltaPrincipalText)
-                                        .keyboardType(.decimalPad)
-                                        .multilineTextAlignment(.trailing)
-                                        .monospacedDigit()
-                                }
-
-                                if let est = estimatedDeltaPrincipal {
+                            // 一键步进胶囊（常用加仓/入账直接点）
+                            HStack(spacing: 8) {
+                                ForEach(quickStepPresets, id: \.label) { preset in
                                     Button {
                                         Haptics.selection()
-                                        deltaPrincipalText = Formatters.editableDecimal(est, maxDecimals: 2)
+                                        let current = parsedDeltaNumber
+                                        deltaNumberText = Formatters.editableDecimal(current + preset.amount, maxDecimals: 2)
                                     } label: {
-                                        Label("按当前单价自动填入 \(Formatters.currency(est))", systemImage: "wand.and.stars")
+                                        Text("\(deltaDirection == .add ? "+" : "-")\(preset.label)")
                                             .font(.caption.weight(.medium))
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 5)
+                                            .background(Color(.tertiarySystemFill), in: Capsule())
                                     }
-                                }
-                            } else {
-                                if usesShares {
-                                    Picker("成本口径", selection: $costEntryStyle) {
-                                        ForEach(CostEntryStyle.allCases) { item in
-                                            Text(item.title).tag(item)
-                                        }
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .onChange(of: costEntryStyle) { _, newStyle in
-                                        Haptics.selection()
-                                        syncCostInputField(for: newStyle)
-                                    }
+                                    .buttonStyle(.plain)
                                 }
 
-                                HStack(spacing: 6) {
-                                    let isUnitCost = (usesShares && costEntryStyle == .unitCostPrice)
-                                    Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
-                                    if !isUnitCost {
-                                        AmountUnitBadge(text: costInputText)
+                                Spacer()
+
+                                Button("清零") {
+                                    Haptics.selection()
+                                    deltaNumberText = ""
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .buttonStyle(.plain)
+                                .opacity(parsedDeltaNumber > 0 ? 1 : 0)
+                                .disabled(parsedDeltaNumber <= 0)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(minHeight: 44)
+
+                            GroupedFormDivider()
+
+                            HStack {
+                                Text(usesShares ? "调整后总份额" : "调整后总金额")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(usesShares ? Formatters.shares(previewSharesOrAmount) : Formatters.currency(previewSharesOrAmount))
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+                        }
+
+                        if usesShares {
+                            GroupedFormDivider()
+
+                            HStack(spacing: 10) {
+                                Text(holding.valuationMode.priceFieldLabel)
+                                TextField("单价", text: $unitPriceText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, minHeight: 24)
+
+                                if holding.supportsQuoteRefresh {
+                                    Button {
+                                        Task { await fetchLatestQuote() }
+                                    } label: {
+                                        ZStack {
+                                            if isFetchingQuote {
+                                                ProgressView()
+                                                    .controlSize(.small)
+                                            } else {
+                                                Label("拉现价", systemImage: "arrow.clockwise")
+                                                    .labelStyle(.titleAndIcon)
+                                                    .font(.caption.weight(.semibold))
+                                            }
+                                        }
+                                        .frame(minWidth: 62, minHeight: 18)
                                     }
-                                    Spacer(minLength: 8)
-                                    TextField("0", text: $costInputText)
-                                        .keyboardType(.decimalPad)
-                                        .multilineTextAlignment(.trailing)
-                                        .monospacedDigit()
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .disabled(isFetchingQuote)
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(minHeight: 44)
+
+                            if let quoteErrorMessage {
+                                GroupedFormDivider()
+
+                                Text(quoteErrorMessage)
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                            }
+                        }
+                    }
+
+                    // 选填成本调整（固定资产若未记录成本则不打扰）
+                    if !isFixedAsset || holding.totalCost != nil {
+                        GroupedFormSection(header: "成本与盈亏（选填）") {
+                            Toggle("记录投入成本（算盈亏）", isOn: $trackCost)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 9)
+                                .frame(minHeight: 44)
+
+                            if trackCost {
+                                if adjustStyle == .deltaChange {
+                                    GroupedFormDivider()
+
+                                    HStack(spacing: 6) {
+                                        Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
+                                        AmountUnitBadge(text: deltaPrincipalText)
+                                        TextField("不填保持原成本", text: $deltaPrincipalText)
+                                            .keyboardType(.decimalPad)
+                                            .autocorrectionDisabled()
+                                            .multilineTextAlignment(.trailing)
+                                            .monospacedDigit()
+                                            .frame(maxWidth: .infinity, minHeight: 24)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 11)
+                                    .frame(minHeight: 44)
+
+                                    if let est = estimatedDeltaPrincipal {
+                                        GroupedFormDivider()
+
+                                        Button {
+                                            Haptics.selection()
+                                            deltaPrincipalText = Formatters.editableDecimal(est, maxDecimals: 2)
+                                        } label: {
+                                            Label("按当前单价自动填入 \(Formatters.currency(est))", systemImage: "wand.and.stars")
+                                                .font(.caption.weight(.medium))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 10)
+                                        .frame(minHeight: 40)
+                                    }
+                                } else {
+                                    if usesShares {
+                                        GroupedFormDivider()
+
+                                        Picker("成本口径", selection: $costEntryStyle) {
+                                            ForEach(CostEntryStyle.allCases) { item in
+                                                Text(item.title).tag(item)
+                                            }
+                                        }
+                                        .pickerStyle(.segmented)
+                                        .onChange(of: costEntryStyle) { _, newStyle in
+                                            Haptics.selection()
+                                            syncCostInputField(for: newStyle)
+                                        }
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 10)
+                                    }
+
+                                    GroupedFormDivider()
+
+                                    HStack(spacing: 6) {
+                                        let isUnitCost = (usesShares && costEntryStyle == .unitCostPrice)
+                                        Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
+                                        if !isUnitCost {
+                                            AmountUnitBadge(text: costInputText)
+                                        }
+                                        TextField("0", text: $costInputText)
+                                            .keyboardType(.decimalPad)
+                                            .autocorrectionDisabled()
+                                            .multilineTextAlignment(.trailing)
+                                            .monospacedDigit()
+                                            .frame(maxWidth: .infinity, minHeight: 24)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 11)
+                                    .frame(minHeight: 44)
                                 }
                             }
                         }
-                    } header: {
-                        Text("成本与盈亏（选填）")
                     }
-                }
 
-                Section {
-                    Button {
-                        Haptics.lightImpact()
-                        onRequestFullEdit()
-                        dismiss()
-                    } label: {
-                        Label(
-                            isFixedAsset ? "修改利率、到期日、名称或备注..." : "修改名称、分类、账户或备注...",
-                            systemImage: "slider.horizontal.3"
-                        )
-                        .font(.subheadline)
+                    GroupedFormSection {
+                        Button {
+                            Haptics.lightImpact()
+                            onRequestFullEdit()
+                            dismiss()
+                        } label: {
+                            Label(
+                                isFixedAsset ? "修改利率、到期日、名称或备注..." : "修改名称、分类、账户或备注...",
+                                systemImage: "slider.horizontal.3"
+                            )
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
             }
+            .background(Color(.systemGroupedBackground))
             .keyboardDismissOverlay()
             .navigationTitle("快速调数")
             .navigationBarTitleDisplayMode(.inline)

@@ -18,7 +18,6 @@ struct HoldingFormSheet: View {
 
     @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
     @Query(sort: \AssetAccount.sortOrder) private var accounts: [AssetAccount]
-    @Query(sort: \AssetHolding.sortOrder) private var allHoldings: [AssetHolding]
 
     let existingHolding: AssetHolding?
     var preselectedCategory: AssetCategory? = nil
@@ -202,394 +201,531 @@ struct HoldingFormSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                // 1. 计价方式与智能代码识别（固定资产自动隐藏证券/基金切换）
-                Section {
-                    if showEntryKindPicker {
-                        Picker("记录方式", selection: $entryKind) {
-                            ForEach(EntryKind.allCases) { kind in
-                                Text(kind.rawValue).tag(kind)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .onChange(of: entryKind) { _, _ in
-                            Haptics.selection()
-                        }
-                    }
-
-                    if entryKind == .quoteTracked {
-                        HStack(spacing: 8) {
-                            TextField("输入代码自动识别（515800、050025、SPY）", text: $code)
-                                .textInputAutocapitalization(.characters)
-                                .autocorrectionDisabled()
-                                .submitLabel(.done)
-                                .onChange(of: code) { _, newValue in
-                                    scheduleAutoLookupIfAppropriate(for: newValue)
+            ScrollView {
+                VStack(spacing: 18) {
+                    // 1. 基本信息（固定资产自动隐藏证券/基金切换）
+                    GroupedFormSection(header: "基本信息") {
+                        if showEntryKindPicker {
+                            Picker("记录方式", selection: $entryKind) {
+                                ForEach(EntryKind.allCases) { kind in
+                                    Text(kind.rawValue).tag(kind)
                                 }
+                            }
+                            .pickerStyle(.segmented)
+                            .onChange(of: entryKind) { _, _ in
+                                Haptics.selection()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
 
-                            ZStack {
-                                if isLookingUpQuote {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    Button {
-                                        Task { await performSmartLookup(rawCode: code, force: true) }
-                                    } label: {
-                                        Image(systemName: "arrow.clockwise.circle.fill")
-                                            .font(.title3)
-                                            .foregroundStyle(Color.accentColor)
+                            GroupedFormDivider()
+                        }
+
+                        if entryKind == .quoteTracked {
+                            HStack(spacing: 8) {
+                                TextField("输入代码自动识别（515800、050025、SPY）", text: $code)
+                                    .textInputAutocapitalization(.characters)
+                                    .autocorrectionDisabled()
+                                    .submitLabel(.done)
+                                    .frame(minHeight: 24)
+                                    .onChange(of: code) { _, newValue in
+                                        scheduleAutoLookupIfAppropriate(for: newValue)
                                     }
-                                    .buttonStyle(.plain)
-                                    .accessibilityLabel("重新识别行情")
-                                }
-                            }
-                            .frame(width: 24, height: 24)
-                        }
 
-                        // 仅在极少数真实重码（如 000001 / LOF）时显示 1 键切换候选
-                        if lookupCandidates.count > 1 {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("检测到同名场内与场外标的，点选你实际持有的渠道：")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                ForEach(lookupCandidates) { candidate in
-                                    let isSelected = (candidate.mode == resolvedQuoteMode)
-                                    Button {
-                                        Haptics.selection()
-                                        applyCandidate(candidate, overwriteName: true)
-                                    } label: {
-                                        HStack {
-                                            Text(candidate.mode.title)
-                                                .font(.caption2.weight(.semibold))
-                                                .foregroundStyle(isSelected ? .white : Color.accentColor)
-                                                .padding(.horizontal, 6)
-                                                .padding(.vertical, 2)
-                                                .background(
-                                                    isSelected ? Color.accentColor : Color.accentColor.opacity(0.14),
-                                                    in: RoundedRectangle(cornerRadius: 4)
-                                                )
-                                            Text(candidate.name)
-                                                .font(.caption.weight(.medium))
-                                                .foregroundStyle(.primary)
-                                                .lineLimit(1)
-                                            Spacer()
-                                            Text("¥\(Formatters.unitPrice(candidate.price))")
-                                                .font(.caption.weight(.semibold))
-                                                .monospacedDigit()
-                                                .foregroundStyle(.primary)
+                                ZStack {
+                                    if isLookingUpQuote {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                    } else if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Button {
+                                            Task { await performSmartLookup(rawCode: code, force: true) }
+                                        } label: {
+                                            Image(systemName: "arrow.clockwise.circle.fill")
+                                                .font(.title3)
+                                                .foregroundStyle(Color.accentColor)
                                         }
-                                        .padding(8)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                                .fill(isSelected ? Color.accentColor.opacity(0.1) : Color(.tertiarySystemFill))
-                                        )
+                                        .buttonStyle(.plain)
+                                        .accessibilityLabel("重新识别行情")
                                     }
-                                    .buttonStyle(.plain)
                                 }
+                                .frame(width: 24, height: 24)
                             }
-                            .padding(.vertical, 2)
-                        } else if let lookupStatusText {
-                            HStack(spacing: 6) {
-                                Image(systemName: lookupIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(lookupIsError ? .orange : .green)
-                                Text(lookupStatusText)
-                                    .font(.caption)
-                                    .foregroundStyle(lookupIsError ? .orange : .secondary)
-                            }
-                        }
-                    }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                    TextField(
-                        entryKind == .quoteTracked
-                            ? "名称（输入代码后自动填充，也可自定）"
-                            : (isFixedAsset ? "资产名称（如：三年期大额存单、定期、房产）" : "资产名称（必填，如：活期存款、货币基金）"),
-                        text: $name
-                    )
+                            // 仅在极少数真实重码（如 000001 / LOF）时显示 1 键切换候选
+                            if lookupCandidates.count > 1 {
+                                GroupedFormDivider()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("检测到同名场内与场外标的，点选你实际持有的渠道：")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    ForEach(lookupCandidates) { candidate in
+                                        let isSelected = (candidate.mode == resolvedQuoteMode)
+                                        Button {
+                                            Haptics.selection()
+                                            applyCandidate(candidate, overwriteName: true)
+                                        } label: {
+                                            HStack {
+                                                Text(candidate.mode.title)
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(isSelected ? .white : Color.accentColor)
+                                                    .padding(.horizontal, 6)
+                                                    .padding(.vertical, 2)
+                                                    .background(
+                                                        isSelected ? Color.accentColor : Color.accentColor.opacity(0.14),
+                                                        in: RoundedRectangle(cornerRadius: 4)
+                                                    )
+                                                Text(candidate.name)
+                                                    .font(.caption.weight(.medium))
+                                                    .foregroundStyle(.primary)
+                                                    .lineLimit(1)
+                                                Spacer()
+                                                Text("¥\(Formatters.unitPrice(candidate.price))")
+                                                    .font(.caption.weight(.semibold))
+                                                    .monospacedDigit()
+                                                    .foregroundStyle(.primary)
+                                            }
+                                            .padding(8)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                    .fill(isSelected ? Color.accentColor.opacity(0.1) : Color(.tertiarySystemFill))
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                            } else if let lookupStatusText {
+                                GroupedFormDivider()
+
+                                HStack(spacing: 6) {
+                                    Image(systemName: lookupIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(lookupIsError ? .orange : .green)
+                                    Text(lookupStatusText)
+                                        .font(.caption)
+                                        .foregroundStyle(lookupIsError ? .orange : .secondary)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                            }
+
+                            GroupedFormDivider()
+                        }
+
+                        TextField(
+                            entryKind == .quoteTracked
+                                ? "名称（输入代码后自动填充，也可自定）"
+                                : (isFixedAsset ? "资产名称（如：三年期大额存单、定期、房产）" : "资产名称（必填，如：活期存款、货币基金）"),
+                            text: $name
+                        )
                         .submitLabel(.done)
+                        .frame(minHeight: 24)
                         .onChange(of: name) { _, newValue in
                             if !autoFillingName {
                                 userEditedName = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             }
                         }
-                } header: {
-                    Text("基本信息")
-                }
-
-                // 2. 当前价值 / 存款金额
-                Section {
-                    if entryKind == .quoteTracked {
-                        HStack {
-                            Text("持有份额 / 股数")
-                            Spacer()
-                            TextField("0", text: $sharesText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                        }
-
-                        HStack {
-                            Text(resolvedQuoteMode.priceFieldLabel)
-                            Spacer()
-                            TextField("1.0000", text: $latestPriceText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                        }
-
-                        HStack {
-                            Text("折算当前市值")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(Formatters.currency(previewMarketValue))
-                                .font(.callout.weight(.semibold))
-                                .monospacedDigit()
-                        }
-                    } else {
-                        HStack(spacing: 6) {
-                            Text(isFixedAsset ? "存款金额（元）" : "当前金额（元）")
-                            AmountUnitBadge(text: manualAmountText)
-                            Spacer(minLength: 8)
-                            TextField("0.00", text: $manualAmountText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                        }
-                    }
-                } header: {
-                    Text(isFixedAsset ? "金额" : "当前价值")
-                }
-
-                // 3. 归属分类与存放账户
-                Section {
-                    Picker("资产类别", selection: $selectedCategoryID) {
-                        Text("未分类").tag(UUID?.none)
-                        ForEach(categories) { cat in
-                            Text("[\(cat.pool == .investable ? "投资" : "固定")] \(cat.name)")
-                                .tag(Optional(cat.id))
-                        }
-                    }
-                    .onChange(of: selectedCategoryID) { _, _ in
-                        if isFixedAsset && entryKind == .quoteTracked
-                            && code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            && sharesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            entryKind = .manualAmount
-                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 11)
+                        .frame(minHeight: 44)
                     }
 
-                    Button {
-                        showingNewCategorySheet = true
-                    } label: {
-                        Label("新建资产类别...", systemImage: "plus.circle")
-                            .font(.footnote)
-                    }
-
-                    Picker("存放账户", selection: $selectedAccountID) {
-                        Text("未指定账户").tag(UUID?.none)
-                        ForEach(accounts) { acc in
-                            Text(acc.name).tag(Optional(acc.id))
-                        }
-                    }
-
-                    Button {
-                        showingNewAccountSheet = true
-                    } label: {
-                        Label("新建存放账户...", systemImage: "plus.circle")
-                            .font(.footnote)
-                    }
-                } header: {
-                    Text("归属维度")
-                } footer: {
-                    if let selectedCat = selectedCategory {
-                        Text(selectedCat.pool == .fixed
-                             ? "归属「固定资产」，计入总净值，不稀释投资占比。"
-                             : "归属「投资资产」，计入投资组合结构占比。")
-                    }
-                }
-
-                // 4. 固定资产专属「利率与存期」 / 投资资产「成本与盈亏」
-                Section {
-                    if isFixedAsset {
-                        HStack {
-                            Text("年化利率")
-                            Spacer()
-                            TextField("如 2.35", text: $annualRateText)
-                                .keyboardType(.decimalPad)
-                                .multilineTextAlignment(.trailing)
-                                .monospacedDigit()
-                            Text("%")
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Toggle("设置起息与到期日", isOn: $hasMaturityDate)
-                            .onChange(of: hasMaturityDate) { _, _ in
-                                Haptics.selection()
-                            }
-
-                        if hasMaturityDate {
-                            DatePicker("起息日", selection: $startDate, displayedComponents: .date)
-                                .onChange(of: startDate) { _, newStart in
-                                    if maturityDate <= newStart {
-                                        maturityDate = Calendar.current.date(byAdding: .year, value: 1, to: newStart) ?? newStart
-                                    }
-                                }
-
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("快捷存期")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                HStack(spacing: 6) {
-                                    ForEach(Self.termPresets) { preset in
-                                        let expected = Calendar.current.date(byAdding: .month, value: preset.months, to: startDate)
-                                        let isSelected = expected.map { Calendar.current.isDate(maturityDate, inSameDayAs: $0) } ?? false
-                                        Button {
-                                            Haptics.selection()
-                                            if let target = expected {
-                                                maturityDate = target
-                                            }
-                                        } label: {
-                                            Text(preset.label)
-                                                .font(.caption2.weight(.medium))
-                                                .lineLimit(1)
-                                                .foregroundStyle(isSelected ? .white : .primary)
-                                                .frame(maxWidth: .infinity)
-                                                .padding(.vertical, 6)
-                                                .background(
-                                                    isSelected ? Color.accentColor : Color(.tertiarySystemFill),
-                                                    in: Capsule()
-                                                )
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                            }
-                            .padding(.vertical, 2)
-
-                            DatePicker("到期日", selection: $maturityDate, displayedComponents: .date)
-                                .onChange(of: maturityDate) { _, newMaturity in
-                                    if newMaturity <= startDate {
-                                        maturityDate = Calendar.current.date(byAdding: .day, value: 1, to: startDate) ?? startDate
-                                    }
-                                }
-                        }
-
-                        HStack {
-                            Text(hasMaturityDate ? "预计到期利息" : "预计年利息")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if let maturityInterest = previewMaturityInterest {
-                                Text("+\(Formatters.currency(maturityInterest))")
-                                    .font(.subheadline.weight(.semibold))
+                    // 2. 金额与利率（固定资产将金额与年化利率同放顶部，均位于键盘安全区上方）
+                    GroupedFormSection(header: isFixedAsset ? "金额与利率" : "当前价值") {
+                        if entryKind == .quoteTracked {
+                            HStack(spacing: 8) {
+                                Text("持有份额 / 股数")
+                                TextField("0", text: $sharesText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
                                     .monospacedDigit()
-                                    .foregroundStyle(CategoryColorToken.amber.color)
-                            } else if let annualInterest = previewAnnualInterest {
-                                Text("+\(Formatters.currency(annualInterest)) / 年")
-                                    .font(.subheadline.weight(.semibold))
-                                    .monospacedDigit()
-                                    .foregroundStyle(CategoryColorToken.amber.color)
-                            } else {
-                                Text("填写金额与利率后自动试算")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .frame(maxWidth: .infinity, minHeight: 24)
                             }
-                        }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                        if hasMaturityDate {
+                            GroupedFormDivider()
+
+                            HStack(spacing: 8) {
+                                Text(resolvedQuoteMode.priceFieldLabel)
+                                TextField("1.0000", text: $latestPriceText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, minHeight: 24)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+
+                            GroupedFormDivider()
+
                             HStack {
-                                let daysLabel = termDaysCount.map { "到期预计本息（共 \($0) 天）" } ?? "到期预计本息"
-                                Text(daysLabel)
-                                    .font(.footnote)
+                                Text("折算当前市值")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(Formatters.currency(previewMarketValue))
+                                    .font(.callout.weight(.semibold))
+                                    .monospacedDigit()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+                        } else {
+                            HStack(spacing: 6) {
+                                Text(isFixedAsset ? "存款金额（元）" : "当前金额（元）")
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
+                                AmountUnitBadge(text: manualAmountText)
+                                TextField("0.00", text: $manualAmountText)
+                                    .keyboardType(.decimalPad)
+                                    .autocorrectionDisabled()
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, minHeight: 24)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+
+                            if isFixedAsset {
+                                GroupedFormDivider()
+
+                                HStack(spacing: 6) {
+                                    Text("年化利率")
+                                    TextField("如 2.35", text: $annualRateText)
+                                        .keyboardType(.decimalPad)
+                                        .autocorrectionDisabled()
+                                        .multilineTextAlignment(.trailing)
+                                        .monospacedDigit()
+                                        .frame(maxWidth: .infinity, minHeight: 24)
+                                    Text("%")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
+                            }
+                        }
+                    }
+
+                    // 3. 归属维度（紧凑双行，右侧一键新建类别/账户）
+                    GroupedFormSection(
+                        header: "归属维度",
+                        footer: selectedCategory.map {
+                            $0.pool == .fixed
+                                ? "归属「固定资产」，计入总净值，不稀释投资占比。"
+                                : "归属「投资资产」，计入投资组合结构占比。"
+                        }
+                    ) {
+                        HStack(spacing: 8) {
+                            Text("资产类别")
+                            Spacer(minLength: 8)
+                            Picker("资产类别", selection: $selectedCategoryID) {
+                                Text("未分类").tag(UUID?.none)
+                                ForEach(categories) { cat in
+                                    Text("[\(cat.pool == .investable ? "投资" : "固定")] \(cat.name)")
+                                        .tag(Optional(cat.id))
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .tint(.secondary)
+                            .onChange(of: selectedCategoryID) { _, _ in
+                                if isFixedAsset && entryKind == .quoteTracked
+                                    && code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    && sharesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    entryKind = .manualAmount
+                                }
+                            }
+
+                            Button {
+                                Haptics.lightImpact()
+                                showingNewCategorySheet = true
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("新建资产类别")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .frame(minHeight: 44)
+
+                        GroupedFormDivider()
+
+                        HStack(spacing: 8) {
+                            Text("存放账户")
+                            Spacer(minLength: 8)
+                            Picker("存放账户", selection: $selectedAccountID) {
+                                Text("未指定账户").tag(UUID?.none)
+                                ForEach(accounts) { acc in
+                                    Text(acc.name).tag(Optional(acc.id))
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .labelsHidden()
+                            .tint(.secondary)
+
+                            Button {
+                                Haptics.lightImpact()
+                                showingNewAccountSheet = true
+                            } label: {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(Color.accentColor)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("新建存放账户")
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 9)
+                        .frame(minHeight: 44)
+                    }
+
+                    // 4. 固定资产「存期与试算」 / 投资资产「成本与备注」
+                    GroupedFormSection(
+                        header: isFixedAsset ? "存期与到期（选填）" : "选填信息",
+                        footer: isFixedAsset ? "房产、车产等非生息资产可直接留空利率与到期日。" : nil
+                    ) {
+                        if isFixedAsset {
+                            Toggle("设置起息与到期日", isOn: $hasMaturityDate)
+                                .onChange(of: hasMaturityDate) { _, _ in
+                                    Haptics.selection()
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 9)
+                                .frame(minHeight: 44)
+
+                            if hasMaturityDate {
+                                GroupedFormDivider()
+
+                                DatePicker("起息日", selection: $startDate, displayedComponents: .date)
+                                    .datePickerStyle(.compact)
+                                    .onChange(of: startDate) { _, newStart in
+                                        if maturityDate <= newStart {
+                                            maturityDate = Calendar.current.date(byAdding: .year, value: 1, to: newStart) ?? newStart
+                                        }
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                                    .frame(minHeight: 44)
+
+                                GroupedFormDivider()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("快捷存期")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    HStack(spacing: 6) {
+                                        ForEach(Self.termPresets) { preset in
+                                            let expected = Calendar.current.date(byAdding: .month, value: preset.months, to: startDate)
+                                            let isSelected = expected.map { Calendar.current.isDate(maturityDate, inSameDayAs: $0) } ?? false
+                                            Button {
+                                                Haptics.selection()
+                                                if let target = expected {
+                                                    maturityDate = target
+                                                }
+                                            } label: {
+                                                Text(preset.label)
+                                                    .font(.caption2.weight(.medium))
+                                                    .lineLimit(1)
+                                                    .foregroundStyle(isSelected ? .white : .primary)
+                                                    .frame(maxWidth: .infinity)
+                                                    .padding(.vertical, 6)
+                                                    .background(
+                                                        isSelected ? Color.accentColor : Color(.tertiarySystemFill),
+                                                        in: Capsule()
+                                                    )
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+
+                                GroupedFormDivider()
+
+                                DatePicker("到期日", selection: $maturityDate, displayedComponents: .date)
+                                    .datePickerStyle(.compact)
+                                    .onChange(of: maturityDate) { _, newMaturity in
+                                        if newMaturity <= startDate {
+                                            maturityDate = Calendar.current.date(byAdding: .day, value: 1, to: startDate) ?? startDate
+                                        }
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 9)
+                                    .frame(minHeight: 44)
+                            }
+
+                            GroupedFormDivider()
+
+                            HStack {
+                                Text(hasMaturityDate ? "预计到期利息" : "预计年利息")
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 if let maturityInterest = previewMaturityInterest {
-                                    Text(Formatters.currency(previewMarketValue + maturityInterest))
+                                    Text("+\(Formatters.currency(maturityInterest))")
                                         .font(.subheadline.weight(.semibold))
                                         .monospacedDigit()
+                                        .foregroundStyle(CategoryColorToken.amber.color)
+                                } else if let annualInterest = previewAnnualInterest {
+                                    Text("+\(Formatters.currency(annualInterest)) / 年")
+                                        .font(.subheadline.weight(.semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(CategoryColorToken.amber.color)
                                 } else {
-                                    Text("—")
-                                        .font(.subheadline)
+                                    Text("填写金额与利率后自动试算")
+                                        .font(.caption)
                                         .foregroundStyle(.tertiary)
                                 }
                             }
-                        }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                        TextField("备注（选填，如存单号、可否提前支取等）", text: $note)
-                            .submitLabel(.done)
-                    } else {
-                        Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost)
+                            if hasMaturityDate {
+                                GroupedFormDivider()
 
-                        if trackCost {
-                            if entryKind == .quoteTracked {
-                                Picker("成本口径", selection: $costEntryStyle) {
-                                    ForEach(CostEntryStyle.allCases) { style in
-                                        Text(style.title).tag(style)
+                                HStack {
+                                    let daysLabel = termDaysCount.map { "到期预计本息（共 \($0) 天）" } ?? "到期预计本息"
+                                    Text(daysLabel)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if let maturityInterest = previewMaturityInterest {
+                                        Text(Formatters.currency(previewMarketValue + maturityInterest))
+                                            .font(.subheadline.weight(.semibold))
+                                            .monospacedDigit()
+                                    } else {
+                                        Text("—")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.tertiary)
                                     }
                                 }
-                                .pickerStyle(.segmented)
-                                .onChange(of: costEntryStyle) { _, newStyle in
-                                    Haptics.selection()
-                                    convertCostStyle(to: newStyle)
-                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
                             }
 
-                            HStack(spacing: 6) {
-                                let isUnitCost = (entryKind == .quoteTracked && costEntryStyle == .unitCostPrice)
-                                Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
-                                if !isUnitCost {
-                                    AmountUnitBadge(text: costInputText)
-                                }
-                                Spacer(minLength: 8)
-                                TextField("0.00", text: $costInputText)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .monospacedDigit()
-                            }
+                            GroupedFormDivider()
 
-                            HStack {
-                                Text("预计累计盈亏")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if let totalCost = computedTotalCost {
-                                    let pnl = previewMarketValue - totalCost
-                                    Text(Formatters.signedCurrency(pnl))
-                                        .font(.subheadline.weight(.semibold))
+                            TextField("备注（选填，如存单号、可否提前支取等）", text: $note)
+                                .submitLabel(.done)
+                                .frame(minHeight: 24)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
+                        } else {
+                            Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 9)
+                                .frame(minHeight: 44)
+
+                            if trackCost {
+                                if entryKind == .quoteTracked {
+                                    GroupedFormDivider()
+
+                                    Picker("成本口径", selection: $costEntryStyle) {
+                                        ForEach(CostEntryStyle.allCases) { style in
+                                            Text(style.title).tag(style)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .onChange(of: costEntryStyle) { _, newStyle in
+                                        Haptics.selection()
+                                        convertCostStyle(to: newStyle)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                }
+
+                                GroupedFormDivider()
+
+                                HStack(spacing: 6) {
+                                    let isUnitCost = (entryKind == .quoteTracked && costEntryStyle == .unitCostPrice)
+                                    Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
+                                        .lineLimit(1)
+                                        .layoutPriority(1)
+                                    if !isUnitCost {
+                                        AmountUnitBadge(text: costInputText)
+                                    }
+                                    TextField("0.00", text: $costInputText)
+                                        .keyboardType(.decimalPad)
+                                        .autocorrectionDisabled()
+                                        .multilineTextAlignment(.trailing)
                                         .monospacedDigit()
-                                        .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
-                                } else {
-                                    Text("—")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.tertiary)
+                                        .frame(maxWidth: .infinity, minHeight: 24)
                                 }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
+
+                                GroupedFormDivider()
+
+                                HStack {
+                                    Text("预计累计盈亏")
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if let totalCost = computedTotalCost {
+                                        let pnl = previewMarketValue - totalCost
+                                        Text(Formatters.signedCurrency(pnl))
+                                            .font(.subheadline.weight(.semibold))
+                                            .monospacedDigit()
+                                            .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
+                                    } else {
+                                        Text("—")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
                             }
+
+                            GroupedFormDivider()
+
+                            TextField("备注（选填，如定投计划等）", text: $note)
+                                .submitLabel(.done)
+                                .frame(minHeight: 24)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
                         }
-
-                        TextField("备注（选填，如定投计划等）", text: $note)
-                            .submitLabel(.done)
                     }
-                } header: {
-                    Text(isFixedAsset ? "利率与存期（选填）" : "选填信息")
-                } footer: {
-                    if isFixedAsset {
-                        Text("房产、车产等非生息资产可直接留空利率与到期日。")
-                    }
-                }
 
-                if isEditing {
-                    Section {
-                        Button(role: .destructive) {
-                            Haptics.lightImpact()
-                            showingDeleteConfirm = true
-                        } label: {
-                            HStack {
-                                Spacer()
+                    if isEditing {
+                        GroupedFormSection {
+                            Button(role: .destructive) {
+                                Haptics.lightImpact()
+                                showingDeleteConfirm = true
+                            } label: {
                                 Text("删除该笔资产")
-                                Spacer()
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
             }
+            .background(Color(.systemGroupedBackground))
             .keyboardDismissOverlay()
             .navigationTitle(isEditing ? (isFixedAsset ? "编辑固定资产" : "编辑资产") : (isFixedAsset ? "新增固定资产" : "新增资产"))
             .navigationBarTitleDisplayMode(.inline)
@@ -805,7 +941,10 @@ struct HoldingFormSheet: View {
             target.account = chosenAccount
             target.lastUpdated = .now
         } else {
-            let nextOrder = (allHoldings.map(\.sortOrder).max() ?? -1) + 1
+            var descriptor = FetchDescriptor<AssetHolding>(sortBy: [SortDescriptor(\.sortOrder, order: .reverse)])
+            descriptor.fetchLimit = 1
+            let maxOrder = (try? modelContext.fetch(descriptor).first?.sortOrder) ?? -1
+            let nextOrder = maxOrder + 1
             let created = AssetHolding(
                 name: trimmedName,
                 valuationMode: effectiveValuationMode,

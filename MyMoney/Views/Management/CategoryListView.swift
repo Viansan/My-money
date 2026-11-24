@@ -284,139 +284,174 @@ struct CategoryEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("基本属性") {
-                    TextField("类别名称（如：海外指数、定期存单）", text: $name)
-                        .submitLabel(.done)
+            ScrollView {
+                VStack(spacing: 18) {
+                    GroupedFormSection(header: "基本属性") {
+                        TextField("类别名称（如：海外指数、定期存单）", text: $name)
+                            .submitLabel(.done)
+                            .frame(minHeight: 24)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                    Picker("资金池归属", selection: $pool) {
-                        ForEach(AssetPool.allCases) { option in
-                            Text(option.title).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: pool) { _, _ in
-                        Haptics.selection()
-                    }
+                        GroupedFormDivider()
 
-                    Text(pool.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if pool == .investable {
-                    Section {
-                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio)
-
-                        if enableTargetRatio {
-                            HStack {
-                                Text("目标占比")
-                                Spacer()
-                                TextField("如 30", text: $targetRatioText)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .monospacedDigit()
-                                Text("%")
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            HStack {
-                                Text("折合参考金额")
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                if let previewAmt = previewTargetAmount {
-                                    Text(Formatters.wholeCurrency(previewAmt))
-                                        .font(.subheadline.weight(.semibold))
-                                        .monospacedDigit()
-                                } else {
-                                    Text("—")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.tertiary)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Picker("资金池归属", selection: $pool) {
+                                ForEach(AssetPool.allCases) { option in
+                                    Text(option.title).tag(option)
                                 }
                             }
-
-                            if let remaining = remainingTargetRatio {
-                                Button {
-                                    Haptics.selection()
-                                    targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
-                                } label: {
-                                    Label("一键填入剩余 \(Formatters.percentPoints(remaining, digits: 1))", systemImage: "wand.and.stars")
-                                        .font(.caption.weight(.medium))
-                                }
-                            }
-                        }
-                    } header: {
-                        Text("目标比例（可选）")
-                    } footer: {
-                        if enableTargetRatio && currentInvestableTotal > 0 {
-                            Text("按当前投资资产 \(Formatters.wholeCurrency(currentInvestableTotal)) 实时折算。")
-                        }
-                    }
-                }
-
-                Section("标识颜色") {
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(CategoryColorToken.allCases) { token in
-                            let selected = (colorToken == token)
-                            Button {
+                            .pickerStyle(.segmented)
+                            .onChange(of: pool) { _, _ in
                                 Haptics.selection()
-                                colorToken = token
-                            } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(token.color)
-                                        .frame(width: 34, height: 34)
-                                    if selected {
-                                        Image(systemName: "checkmark")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
+                            }
+
+                            Text(pool.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                    }
+
+                    if pool == .investable {
+                        GroupedFormSection(
+                            header: "目标比例（可选）",
+                            footer: (enableTargetRatio && currentInvestableTotal > 0)
+                                ? "按当前投资资产 \(Formatters.wholeCurrency(currentInvestableTotal)) 实时折算。"
+                                : nil
+                        ) {
+                            Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 9)
+                                .frame(minHeight: 44)
+
+                            if enableTargetRatio {
+                                GroupedFormDivider()
+
+                                HStack(spacing: 6) {
+                                    Text("目标占比")
+                                    TextField("如 30", text: $targetRatioText)
+                                        .keyboardType(.decimalPad)
+                                        .autocorrectionDisabled()
+                                        .multilineTextAlignment(.trailing)
+                                        .monospacedDigit()
+                                        .frame(maxWidth: .infinity, minHeight: 24)
+                                    Text("%")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
+
+                                GroupedFormDivider()
+
+                                HStack {
+                                    Text("折合参考金额")
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if let previewAmt = previewTargetAmount {
+                                        Text(Formatters.wholeCurrency(previewAmt))
+                                            .font(.subheadline.weight(.semibold))
+                                            .monospacedDigit()
+                                    } else {
+                                        Text("—")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.tertiary)
                                     }
                                 }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 11)
+                                .frame(minHeight: 44)
 
-                Section("图标") {
-                    LazyVGrid(columns: iconColumns, spacing: 12) {
-                        ForEach(PresetIcons.categoryIcons, id: \.self) { symbol in
-                            let selected = (iconName == symbol)
-                            Button {
-                                Haptics.selection()
-                                iconName = symbol
-                            } label: {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
-                                        .frame(width: 40, height: 40)
-                                    Image(systemName: symbol)
-                                        .font(.callout.weight(.semibold))
-                                        .foregroundStyle(selected ? colorToken.color : .secondary)
+                                if let remaining = remainingTargetRatio {
+                                    GroupedFormDivider()
+
+                                    Button {
+                                        Haptics.selection()
+                                        targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
+                                    } label: {
+                                        Label("一键填入剩余 \(Formatters.percentPoints(remaining, digits: 1))", systemImage: "wand.and.stars")
+                                            .font(.caption.weight(.medium))
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 10)
+                                    .frame(minHeight: 40)
                                 }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
-                    .padding(.vertical, 6)
-                }
 
-                if existingCategory != nil {
-                    Section {
-                        Button(role: .destructive) {
-                            Haptics.lightImpact()
-                            showingDeleteConfirm = true
-                        } label: {
-                            HStack {
-                                Spacer()
+                    GroupedFormSection(header: "标识颜色") {
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(CategoryColorToken.allCases) { token in
+                                let selected = (colorToken == token)
+                                Button {
+                                    Haptics.selection()
+                                    colorToken = token
+                                } label: {
+                                    ZStack {
+                                        Circle()
+                                            .fill(token.color)
+                                            .frame(width: 34, height: 34)
+                                        if selected {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                    }
+
+                    GroupedFormSection(header: "图标") {
+                        LazyVGrid(columns: iconColumns, spacing: 12) {
+                            ForEach(PresetIcons.categoryIcons, id: \.self) { symbol in
+                                let selected = (iconName == symbol)
+                                Button {
+                                    Haptics.selection()
+                                    iconName = symbol
+                                } label: {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
+                                            .frame(width: 40, height: 40)
+                                        Image(systemName: symbol)
+                                            .font(.callout.weight(.semibold))
+                                            .foregroundStyle(selected ? colorToken.color : .secondary)
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
+                    }
+
+                    if existingCategory != nil {
+                        GroupedFormSection {
+                            Button(role: .destructive) {
+                                Haptics.lightImpact()
+                                showingDeleteConfirm = true
+                            } label: {
                                 Text("删除该类别")
-                                Spacer()
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
             }
+            .background(Color(.systemGroupedBackground))
             .keyboardDismissOverlay()
             .navigationTitle(existingCategory == nil ? "新建资产类别" : "编辑资产类别")
             .navigationBarTitleDisplayMode(.inline)

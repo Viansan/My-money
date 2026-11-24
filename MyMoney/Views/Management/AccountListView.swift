@@ -198,78 +198,94 @@ struct AccountEditorSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("账户信息") {
-                    TextField("账户名称（如：招商银行、某券商、支付宝）", text: $name)
-                        .submitLabel(.done)
+            ScrollView {
+                VStack(spacing: 18) {
+                    GroupedFormSection(header: "账户信息") {
+                        TextField("账户名称（如：招商银行、某券商、支付宝）", text: $name)
+                            .submitLabel(.done)
+                            .frame(minHeight: 24)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
 
-                    TextField("副标题或备注（选填，如尾号或用途）", text: $subtitle)
-                        .submitLabel(.done)
-                }
+                        GroupedFormDivider()
 
-                Section("标识颜色") {
-                    LazyVGrid(columns: columns, spacing: 14) {
-                        ForEach(CategoryColorToken.allCases) { token in
-                            let selected = (colorToken == token)
-                            Button {
-                                Haptics.selection()
-                                colorToken = token
-                            } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(token.color)
-                                        .frame(width: 34, height: 34)
-                                    if selected {
-                                        Image(systemName: "checkmark")
-                                            .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
+                        TextField("副标题或备注（选填，如尾号或用途）", text: $subtitle)
+                            .submitLabel(.done)
+                            .frame(minHeight: 24)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 11)
+                            .frame(minHeight: 44)
+                    }
+
+                    GroupedFormSection(header: "标识颜色") {
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(CategoryColorToken.allCases) { token in
+                                let selected = (colorToken == token)
+                                Button {
+                                    Haptics.selection()
+                                    colorToken = token
+                                } label: {
+                                    ZStack {
+                                        Circle()
+                                            .fill(token.color)
+                                            .frame(width: 34, height: 34)
+                                        if selected {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption.weight(.bold))
+                                                .foregroundStyle(.white)
+                                        }
                                     }
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                     }
-                    .padding(.vertical, 6)
-                }
 
-                Section("图标") {
-                    LazyVGrid(columns: iconColumns, spacing: 12) {
-                        ForEach(PresetIcons.accountIcons, id: \.self) { symbol in
-                            let selected = (iconName == symbol)
-                            Button {
-                                Haptics.selection()
-                                iconName = symbol
-                            } label: {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
-                                        .frame(width: 44, height: 40)
-                                    Image(systemName: symbol)
-                                        .font(.callout.weight(.semibold))
-                                        .foregroundStyle(selected ? colorToken.color : .secondary)
+                    GroupedFormSection(header: "图标") {
+                        LazyVGrid(columns: iconColumns, spacing: 12) {
+                            ForEach(PresetIcons.accountIcons, id: \.self) { symbol in
+                                let selected = (iconName == symbol)
+                                Button {
+                                    Haptics.selection()
+                                    iconName = symbol
+                                } label: {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .fill(selected ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
+                                            .frame(width: 44, height: 40)
+                                        Image(systemName: symbol)
+                                            .font(.callout.weight(.semibold))
+                                            .foregroundStyle(selected ? colorToken.color : .secondary)
+                                    }
                                 }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 14)
                     }
-                    .padding(.vertical, 6)
-                }
 
-                if existingAccount != nil {
-                    Section {
-                        Button(role: .destructive) {
-                            Haptics.lightImpact()
-                            showingDeleteConfirm = true
-                        } label: {
-                            HStack {
-                                Spacer()
+                    if existingAccount != nil {
+                        GroupedFormSection {
+                            Button(role: .destructive) {
+                                Haptics.lightImpact()
+                                showingDeleteConfirm = true
+                            } label: {
                                 Text("删除该账户")
-                                Spacer()
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                                    .contentShape(Rectangle())
                             }
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 32)
             }
+            .background(Color(.systemGroupedBackground))
             .keyboardDismissOverlay()
             .navigationTitle(existingAccount == nil ? "新建账户" : "编辑账户")
             .navigationBarTitleDisplayMode(.inline)

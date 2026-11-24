@@ -81,21 +81,60 @@ struct RefreshToolbarButton: View {
     }
 }
 
-/// 表单键盘收起修饰器（仅使用原生交互式下拉收起，不在键盘动画期间向视图树动态增删浮层节点）
-/// - 规避 iOS 26 下 `ToolbarItemGroup(placement: .keyboard)` 与聚焦瞬间动态插入 `.overlay` 触发 UIKit `inProcessAnimation` `NSArrayM nil` 崩溃
+/// 表单键盘收起修饰器（滚动时立即收起，不绑定交互式拖动手势，避免 iOS 26 键盘弹起时与自动滚动冲突）
 struct KeyboardDismissOverlayModifier: ViewModifier {
     let isVisible: Bool
     let onDismiss: () -> Void
 
     func body(content: Content) -> some View {
         content
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
     }
 }
 
 extension View {
     func keyboardDismissOverlay(isVisible: Bool = false, onDismiss: @escaping () -> Void = {}) -> some View {
         modifier(KeyboardDismissOverlayModifier(isVisible: isVisible, onDismiss: onDismiss))
+    }
+}
+
+/// 轻量分组卡片表单容器（基于 ScrollView + VStack，彻底替代 iOS 26 下键盘弹起易卡顿/跳动的 Form/UICollectionView）
+struct GroupedFormSection<Content: View>: View {
+    var header: String? = nil
+    var footer: String? = nil
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let header, !header.isEmpty {
+                Text(header)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            }
+
+            VStack(spacing: 0) {
+                content()
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+            )
+
+            if let footer, !footer.isEmpty {
+                Text(footer)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            }
+        }
+    }
+}
+
+struct GroupedFormDivider: View {
+    var body: some View {
+        Divider()
+            .padding(.leading, 16)
     }
 }
 

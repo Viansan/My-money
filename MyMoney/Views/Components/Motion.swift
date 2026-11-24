@@ -81,8 +81,8 @@ struct RefreshToolbarButton: View {
     }
 }
 
-/// 纯 SwiftUI 键盘收起浮层（支持交互式下拉收起 + 右下角浮动「完成」胶囊）
-/// - 彻底规避 iOS 26 下 `ToolbarItemGroup(placement: .keyboard)` 在第三方输入法与 `.decimalPad` 切换时触发 UIKit `NSArrayM nil` 崩溃
+/// 表单键盘收起修饰器（仅使用原生交互式下拉收起，不在键盘动画期间向视图树动态增删浮层节点）
+/// - 规避 iOS 26 下 `ToolbarItemGroup(placement: .keyboard)` 与聚焦瞬间动态插入 `.overlay` 触发 UIKit `inProcessAnimation` `NSArrayM nil` 崩溃
 struct KeyboardDismissOverlayModifier: ViewModifier {
     let isVisible: Bool
     let onDismiss: () -> Void
@@ -90,35 +90,39 @@ struct KeyboardDismissOverlayModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollDismissesKeyboard(.interactively)
-            .overlay(alignment: .bottomTrailing) {
-                if isVisible {
-                    Button {
-                        onDismiss()
-                    } label: {
-                        Text("完成")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(.regularMaterial, in: Capsule())
-                            .overlay(
-                                Capsule()
-                                    .strokeBorder(Color(.separator).opacity(0.35), lineWidth: 0.5)
-                            )
-                            .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 10)
-                    .accessibilityLabel("收起键盘")
-                }
-            }
     }
 }
 
 extension View {
-    func keyboardDismissOverlay(isVisible: Bool, onDismiss: @escaping () -> Void) -> some View {
+    func keyboardDismissOverlay(isVisible: Bool = false, onDismiss: @escaping () -> Void = {}) -> some View {
         modifier(KeyboardDismissOverlayModifier(isVisible: isVisible, onDismiss: onDismiss))
     }
 }
+
+/// 金额输入框的大额读数辅助微标（如 1000000 显示「100万」胶囊，节点常驻不触发重排）
+struct AmountUnitBadge: View {
+    let text: String
+
+    private var hint: String? {
+        Formatters.amountReadingHint(text)
+    }
+
+    var body: some View {
+        let label = hint ?? ""
+        Text(label)
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+            .foregroundStyle(Color.accentColor)
+            .padding(.horizontal, hint == nil ? 0 : 6)
+            .padding(.vertical, hint == nil ? 0 : 2)
+            .background(
+                Capsule()
+                    .fill(Color.accentColor.opacity(hint == nil ? 0 : 0.12))
+            )
+            .fixedSize()
+            .opacity(hint == nil ? 0 : 1)
+            .accessibilityHidden(hint == nil)
+    }
+}
+
 

@@ -169,7 +169,6 @@ struct AccountListView: View {
 struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetAccount.sortOrder) private var allAccounts: [AssetAccount]
     @Query private var allHoldings: [AssetHolding]
@@ -183,13 +182,6 @@ struct AccountEditorSheet: View {
     @State private var iconName: String = "building.columns.fill"
     @State private var showingDeleteConfirm = false
     @State private var hasLoadedInitial = false
-
-    private enum Field: Hashable {
-        case name
-        case subtitle
-    }
-
-    @FocusState private var focusedField: Field?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
     private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
@@ -209,10 +201,10 @@ struct AccountEditorSheet: View {
             Form {
                 Section("账户信息") {
                     TextField("账户名称（如：招商银行、某券商、支付宝）", text: $name)
-                        .focused($focusedField, equals: .name)
+                        .submitLabel(.done)
 
                     TextField("副标题或备注（选填，如尾号或用途）", text: $subtitle)
-                        .focused($focusedField, equals: .subtitle)
+                        .submitLabel(.done)
                 }
 
                 Section("标识颜色") {
@@ -221,24 +213,20 @@ struct AccountEditorSheet: View {
                             let selected = (colorToken == token)
                             Button {
                                 Haptics.selection()
-                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                                    colorToken = token
-                                }
+                                colorToken = token
                             } label: {
                                 ZStack {
                                     Circle()
                                         .fill(token.color)
                                         .frame(width: 34, height: 34)
-                                        .scaleEffect(selected && !reduceMotion ? 1.08 : 1.0)
                                     if selected {
                                         Image(systemName: "checkmark")
                                             .font(.caption.weight(.bold))
                                             .foregroundStyle(.white)
-                                            .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
                                     }
                                 }
                             }
-                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 6)
@@ -250,9 +238,7 @@ struct AccountEditorSheet: View {
                             let selected = (iconName == symbol)
                             Button {
                                 Haptics.selection()
-                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                                    iconName = symbol
-                                }
+                                iconName = symbol
                             } label: {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -262,9 +248,8 @@ struct AccountEditorSheet: View {
                                         .font(.callout.weight(.semibold))
                                         .foregroundStyle(selected ? colorToken.color : .secondary)
                                 }
-                                .scaleEffect(selected && !reduceMotion ? 1.05 : 1.0)
                             }
-                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.92))
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 6)
@@ -285,7 +270,7 @@ struct AccountEditorSheet: View {
                     }
                 }
             }
-            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
+            .keyboardDismissOverlay()
             .navigationTitle(existingAccount == nil ? "新建账户" : "编辑账户")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)

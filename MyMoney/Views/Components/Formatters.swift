@@ -204,6 +204,21 @@ enum Formatters {
         }
     }
 
+    /// 输入框旁的大额数字辅助阅读提示（如 1000000 -> "100万"，125000 -> "12.5万"，低于 1 万不显示避免干扰）
+    static func amountReadingHint(_ text: String) -> String? {
+        guard let raw = parseDouble(text) else { return nil }
+        let absVal = abs(raw)
+        guard absVal >= 10_000, absVal.isFinite else { return nil }
+        let prefix = raw < 0 ? "-" : ""
+        if absVal >= 100_000_000 {
+            let yi = absVal / 100_000_000.0
+            return "\(prefix)\(editableDecimal(yi, maxDecimals: 4))亿"
+        } else {
+            let wan = absVal / 10_000.0
+            return "\(prefix)\(editableDecimal(wan, maxDecimals: 2))万"
+        }
+    }
+
     static func backupFilename(date: Date = .now) -> String {
         "MyMoney_Backup_\(backupFileDateFormatter.string(from: date)).json"
     }

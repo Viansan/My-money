@@ -227,7 +227,6 @@ struct CategoryListView: View {
 struct CategoryEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetCategory.sortOrder) private var allCategories: [AssetCategory]
     @Query private var allHoldings: [AssetHolding]
@@ -244,13 +243,6 @@ struct CategoryEditorSheet: View {
     @State private var targetRatioText: String = ""
     @State private var showingDeleteConfirm = false
     @State private var hasLoadedInitial = false
-
-    private enum Field: Hashable {
-        case name
-        case targetRatio
-    }
-
-    @FocusState private var focusedField: Field?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
     private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 6)
@@ -295,7 +287,7 @@ struct CategoryEditorSheet: View {
             Form {
                 Section("基本属性") {
                     TextField("类别名称（如：海外指数、定期存单）", text: $name)
-                        .focused($focusedField, equals: .name)
+                        .submitLabel(.done)
 
                     Picker("资金池归属", selection: $pool) {
                         ForEach(AssetPool.allCases) { option in
@@ -324,30 +316,29 @@ struct CategoryEditorSheet: View {
                                     .keyboardType(.decimalPad)
                                     .multilineTextAlignment(.trailing)
                                     .monospacedDigit()
-                                    .focused($focusedField, equals: .targetRatio)
                                 Text("%")
                                     .foregroundStyle(.secondary)
                             }
 
-                            if let previewAmt = previewTargetAmount {
-                                HStack {
-                                    Text("折合参考金额")
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
+                            HStack {
+                                Text("折合参考金额")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                if let previewAmt = previewTargetAmount {
                                     Text(Formatters.wholeCurrency(previewAmt))
                                         .font(.subheadline.weight(.semibold))
                                         .monospacedDigit()
-                                        .contentTransition(.numericText(value: previewAmt))
-                                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: previewAmt)
+                                } else {
+                                    Text("—")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.tertiary)
                                 }
                             }
 
                             if let remaining = remainingTargetRatio {
                                 Button {
                                     Haptics.selection()
-                                    withAnimation(Motion.numeric(reduceMotion: reduceMotion)) {
-                                        targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
-                                    }
+                                    targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
                                 } label: {
                                     Label("一键填入剩余 \(Formatters.percentPoints(remaining, digits: 1))", systemImage: "wand.and.stars")
                                         .font(.caption.weight(.medium))
@@ -369,24 +360,20 @@ struct CategoryEditorSheet: View {
                             let selected = (colorToken == token)
                             Button {
                                 Haptics.selection()
-                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                                    colorToken = token
-                                }
+                                colorToken = token
                             } label: {
                                 ZStack {
                                     Circle()
                                         .fill(token.color)
                                         .frame(width: 34, height: 34)
-                                        .scaleEffect(selected && !reduceMotion ? 1.08 : 1.0)
                                     if selected {
                                         Image(systemName: "checkmark")
                                             .font(.caption.weight(.bold))
                                             .foregroundStyle(.white)
-                                            .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
                                     }
                                 }
                             }
-                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.90))
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 6)
@@ -398,9 +385,7 @@ struct CategoryEditorSheet: View {
                             let selected = (iconName == symbol)
                             Button {
                                 Haptics.selection()
-                                withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                                    iconName = symbol
-                                }
+                                iconName = symbol
                             } label: {
                                 ZStack {
                                     RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -410,9 +395,8 @@ struct CategoryEditorSheet: View {
                                         .font(.callout.weight(.semibold))
                                         .foregroundStyle(selected ? colorToken.color : .secondary)
                                 }
-                                .scaleEffect(selected && !reduceMotion ? 1.05 : 1.0)
                             }
-                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.92))
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.vertical, 6)
@@ -433,7 +417,7 @@ struct CategoryEditorSheet: View {
                     }
                 }
             }
-            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
+            .keyboardDismissOverlay()
             .navigationTitle(existingCategory == nil ? "新建资产类别" : "编辑资产类别")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)

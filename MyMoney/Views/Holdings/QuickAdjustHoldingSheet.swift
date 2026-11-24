@@ -40,16 +40,6 @@ struct QuickAdjustHoldingSheet: View {
     @State private var isFetchingQuote: Bool = false
     @State private var quoteErrorMessage: String?
 
-    private enum Field: Hashable {
-        case primaryNumber
-        case deltaNumber
-        case unitPrice
-        case deltaPrincipal
-        case costInput
-    }
-
-    @FocusState private var focusedField: Field?
-
     private var usesShares: Bool {
         holding.valuationMode.usesSharesAndPrice
     }
@@ -196,14 +186,12 @@ struct QuickAdjustHoldingSheet: View {
                             Text(Formatters.currency(previewMarketValue))
                                 .font(.system(.title3, design: .rounded, weight: .bold))
                                 .monospacedDigit()
-                                .contentTransition(.numericText(value: previewMarketValue))
 
                             if abs(valueChangeDelta) >= 0.01 {
                                 Text("变动 \(Formatters.signedCurrency(valueChangeDelta))")
                                     .font(.caption.weight(.semibold))
                                     .monospacedDigit()
                                     .foregroundStyle(Color.accentColor)
-                                    .contentTransition(.numericText(value: valueChangeDelta))
                             } else if let interestText = previewDepositInterestText {
                                 Text(interestText)
                                     .font(.caption.weight(.medium))
@@ -215,7 +203,6 @@ struct QuickAdjustHoldingSheet: View {
                                     .font(.caption.weight(.medium))
                                     .monospacedDigit()
                                     .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
-                                    .contentTransition(.numericText(value: pnl))
                             }
                         }
                     }
@@ -234,14 +221,16 @@ struct QuickAdjustHoldingSheet: View {
                     }
 
                     if adjustStyle == .replaceTotal {
-                        HStack {
+                        HStack(spacing: 6) {
                             Text(usesShares ? "最新持有份额" : (isFixedAsset ? "存款金额（元）" : "最新总金额（元）"))
-                            Spacer()
+                            if !usesShares {
+                                AmountUnitBadge(text: primaryNumberText)
+                            }
+                            Spacer(minLength: 8)
                             TextField("0", text: $primaryNumberText)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
-                                .focused($focusedField, equals: .primaryNumber)
                         }
                     } else {
                         Picker("变动方向", selection: $deltaDirection) {
@@ -254,14 +243,16 @@ struct QuickAdjustHoldingSheet: View {
                             Haptics.selection()
                         }
 
-                        HStack {
+                        HStack(spacing: 6) {
                             Text(usesShares ? "本次变动份额" : "本次变动金额")
-                            Spacer()
+                            if !usesShares {
+                                AmountUnitBadge(text: deltaNumberText)
+                            }
+                            Spacer(minLength: 8)
                             TextField(usesShares ? "输入份数" : "输入金额", text: $deltaNumberText)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
-                                .focused($focusedField, equals: .deltaNumber)
                         }
 
                         // 一键步进胶囊（常用加仓/入账直接点）
@@ -283,15 +274,15 @@ struct QuickAdjustHoldingSheet: View {
 
                             Spacer()
 
-                            if parsedDeltaNumber > 0 {
-                                Button("清零") {
-                                    Haptics.selection()
-                                    deltaNumberText = ""
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .buttonStyle(.plain)
+                            Button("清零") {
+                                Haptics.selection()
+                                deltaNumberText = ""
                             }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
+                            .opacity(parsedDeltaNumber > 0 ? 1 : 0)
+                            .disabled(parsedDeltaNumber <= 0)
                         }
 
                         HStack {
@@ -301,7 +292,6 @@ struct QuickAdjustHoldingSheet: View {
                             Text(usesShares ? Formatters.shares(previewSharesOrAmount) : Formatters.currency(previewSharesOrAmount))
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
-                                .contentTransition(.numericText(value: previewSharesOrAmount))
                         }
                     }
 
@@ -313,7 +303,6 @@ struct QuickAdjustHoldingSheet: View {
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
-                                .focused($focusedField, equals: .unitPrice)
 
                             if holding.supportsQuoteRefresh {
                                 Button {
@@ -354,14 +343,14 @@ struct QuickAdjustHoldingSheet: View {
 
                         if trackCost {
                             if adjustStyle == .deltaChange {
-                                HStack {
+                                HStack(spacing: 6) {
                                     Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
-                                    Spacer()
+                                    AmountUnitBadge(text: deltaPrincipalText)
+                                    Spacer(minLength: 8)
                                     TextField("不填保持原成本", text: $deltaPrincipalText)
                                         .keyboardType(.decimalPad)
                                         .multilineTextAlignment(.trailing)
                                         .monospacedDigit()
-                                        .focused($focusedField, equals: .deltaPrincipal)
                                 }
 
                                 if let est = estimatedDeltaPrincipal {
@@ -387,14 +376,17 @@ struct QuickAdjustHoldingSheet: View {
                                     }
                                 }
 
-                                HStack {
-                                    Text(usesShares && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
-                                    Spacer()
+                                HStack(spacing: 6) {
+                                    let isUnitCost = (usesShares && costEntryStyle == .unitCostPrice)
+                                    Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
+                                    if !isUnitCost {
+                                        AmountUnitBadge(text: costInputText)
+                                    }
+                                    Spacer(minLength: 8)
                                     TextField("0", text: $costInputText)
                                         .keyboardType(.decimalPad)
                                         .multilineTextAlignment(.trailing)
                                         .monospacedDigit()
-                                        .focused($focusedField, equals: .costInput)
                                 }
                             }
                         }
@@ -417,7 +409,7 @@ struct QuickAdjustHoldingSheet: View {
                     }
                 }
             }
-            .keyboardDismissOverlay(isVisible: focusedField != nil) { focusedField = nil }
+            .keyboardDismissOverlay()
             .navigationTitle("快速调数")
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasChanges)

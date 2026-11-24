@@ -55,6 +55,8 @@ struct AllocationSlice: Identifiable {
     let netWorthRatioPercent: Double
     /// 选填目标占比（0 ~ 100，nil 表示未设目标）
     let targetRatioPercent: Double?
+    /// 按所属投资资产池总额折算出的参考目标金额（元）
+    let targetAmount: Double?
     let holdingCount: Int
     let pnl: PnLSummary
 
@@ -62,6 +64,12 @@ struct AllocationSlice: Identifiable {
     var deviationPoints: Double? {
         guard let target = targetRatioPercent else { return nil }
         return poolRatioPercent - target
+    }
+
+    /// 实际金额与参考目标金额的差额（正值表示超出目标，负值表示距离目标尚缺）
+    var deviationAmount: Double? {
+        guard let targetAmount else { return nil }
+        return amount - targetAmount
     }
 }
 
@@ -144,6 +152,10 @@ struct PortfolioSnapshot {
             let amount = catHoldings.reduce(0.0) { $0 + $1.marketValue }
             let poolPct = investableSum > 0 ? (amount / investableSum) * 100.0 : 0
             let totalPct = netWorth > 0 ? (amount / netWorth) * 100.0 : 0
+            let targetAmt: Double? = {
+                guard let ratio = cat.targetRatio, investableSum > 0 else { return nil }
+                return investableSum * (ratio / 100.0)
+            }()
             return AllocationSlice(
                 id: cat.id,
                 categoryID: cat.id,
@@ -155,6 +167,7 @@ struct PortfolioSnapshot {
                 poolRatioPercent: poolPct,
                 netWorthRatioPercent: totalPct,
                 targetRatioPercent: cat.targetRatio,
+                targetAmount: targetAmt,
                 holdingCount: catHoldings.count,
                 pnl: PnLSummary.compute(from: catHoldings)
             )
@@ -175,6 +188,7 @@ struct PortfolioSnapshot {
                     poolRatioPercent: investableSum > 0 ? (amount / investableSum) * 100.0 : 0,
                     netWorthRatioPercent: netWorth > 0 ? (amount / netWorth) * 100.0 : 0,
                     targetRatioPercent: nil,
+                    targetAmount: nil,
                     holdingCount: uncategorizedInvestable.count,
                     pnl: PnLSummary.compute(from: uncategorizedInvestable)
                 )
@@ -200,6 +214,7 @@ struct PortfolioSnapshot {
                 poolRatioPercent: poolPct,
                 netWorthRatioPercent: totalPct,
                 targetRatioPercent: nil,
+                targetAmount: nil,
                 holdingCount: catHoldings.count,
                 pnl: PnLSummary.compute(from: catHoldings)
             )
@@ -220,6 +235,7 @@ struct PortfolioSnapshot {
                     poolRatioPercent: fixedSum > 0 ? (amount / fixedSum) * 100.0 : 0,
                     netWorthRatioPercent: netWorth > 0 ? (amount / netWorth) * 100.0 : 0,
                     targetRatioPercent: nil,
+                    targetAmount: nil,
                     holdingCount: uncategorizedFixed.count,
                     pnl: PnLSummary.compute(from: uncategorizedFixed)
                 )

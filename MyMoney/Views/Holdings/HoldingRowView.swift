@@ -3,7 +3,7 @@ import SwiftUI
 /// 持仓页分组维度
 enum HoldingsGroupMode: String, CaseIterable, Identifiable {
     case byCategory = "按类别"
-    case byAccount = "按账户对账"
+    case byAccount = "按账户"
 
     var id: String { rawValue }
 }
@@ -34,45 +34,45 @@ struct HoldingRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
                     Text(holding.name)
-                        .font(.body.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
 
                     if holding.effectivePool == .fixed {
                         Text("固定")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 9.5, weight: .semibold))
                             .foregroundStyle(CategoryColorToken.amber.color)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 2)
-                            .background(CategoryColorToken.amber.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1.5)
+                            .background(CategoryColorToken.amber.color.opacity(0.14), in: RoundedRectangle(cornerRadius: 3.5))
                     }
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: 5) {
                     if holding.valuationMode.usesSharesAndPrice && !holding.code.isEmpty {
                         Text(holding.code)
                             .font(.caption2.weight(.medium))
                             .monospacedDigit()
                             .foregroundStyle(accentTint)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(accentTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(.horizontal, 4.5)
+                            .padding(.vertical, 1)
+                            .background(accentTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 3.5))
                     } else {
                         Text(holding.valuationMode.shortBadge)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1.5)
-                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 4))
+                            .padding(.horizontal, 4.5)
+                            .padding(.vertical, 1)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 3.5))
                     }
 
                     if let tag = crossDimensionTag, !tag.isEmpty {
                         Text(tag)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -86,11 +86,11 @@ struct HoldingRowView: View {
                 }
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
 
-            VStack(alignment: .trailing, spacing: 4) {
+            VStack(alignment: .trailing, spacing: 2.5) {
                 Text(Formatters.currency(holding.marketValue, hidden: hideAmounts))
-                    .font(.system(.callout, design: .rounded, weight: .semibold))
+                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
 
@@ -102,7 +102,7 @@ struct HoldingRowView: View {
                 }
 
                 if let pnl = holding.profitLoss {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Text(Formatters.signedCurrency(pnl, hidden: hideAmounts))
                         if let rate = holding.profitLossRate {
                             Text("(\(Formatters.signedRate(rate, hidden: hideAmounts)))")
@@ -114,7 +114,7 @@ struct HoldingRowView: View {
                 }
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 1)
         .contentShape(Rectangle())
     }
 }

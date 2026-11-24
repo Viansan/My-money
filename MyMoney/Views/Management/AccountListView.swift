@@ -35,7 +35,9 @@ struct AccountListView: View {
                 Text("将不同券商、银行或理财平台建为独立账户后，可在「资产」页切为「按账户对账」，逐个核对账面余额。")
             }
         }
+        .listSectionSpacing(.compact)
         .navigationTitle("账户/渠道管理")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if accounts.count >= 2 {
                 ToolbarItem(placement: .topBarTrailing) {

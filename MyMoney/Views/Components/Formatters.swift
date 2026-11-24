@@ -67,6 +67,33 @@ enum Formatters {
         return "\(sign)¥\(formatted)"
     }
 
+    private static let wholeCurrencyFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = 0
+        f.maximumFractionDigits = 0
+        return f
+    }()
+
+    /// 格式化紧凑参考金额（省去角分噪点：如 ¥78,427 或 ¥12.50万）
+    static func wholeCurrency(_ value: Double, hidden: Bool = false) -> String {
+        if hidden {
+            return "¥••••"
+        }
+        let safeValue = value.isFinite ? value : 0
+        let sign = safeValue < 0 ? "-" : ""
+        let absVal = abs(safeValue)
+
+        if absVal >= 100_000 {
+            let wan = absVal / 10_000.0
+            let formatted = compactCurrencyFormatter.string(from: NSNumber(value: wan)) ?? String(format: "%.2f", wan)
+            return "\(sign)¥\(formatted)万"
+        }
+
+        let formatted = wholeCurrencyFormatter.string(from: NSNumber(value: round(absVal))) ?? String(format: "%.0f", absVal)
+        return "\(sign)¥\(formatted)"
+    }
+
     /// 格式化带正负号的盈亏金额
     static func signedCurrency(_ value: Double, hidden: Bool = false) -> String {
         if hidden {

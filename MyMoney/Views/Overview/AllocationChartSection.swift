@@ -16,12 +16,12 @@ struct RingChartItem: Identifiable {
     let name: String
     let amount: Double
     let percent: Double
+    let deviationAmount: Double?
     let color: Color
 }
 
-/// 基于 Swift Charts `SectorMark` 的可交互环形图卡片
-/// - 只显示此刻有数据的视角，不展示无意义的空 Tab
-/// - 轻点环上任意色块即可高亮并展示该项金额与占比；再点一次（或点圆心）即可收回恢复总览
+/// 嵌入式可交互环形图模块（与下方明细行融为同一视觉表面，消除模块割裂感）
+/// - 轻点环上色块即可高亮并在圆心显示该项金额、占比与目标差额；再点一次或点圆心即收回
 struct AllocationChartSection: View {
     @Binding var selectedLens: OverviewLens
     let availableLenses: [OverviewLens]
@@ -42,6 +42,7 @@ struct AllocationChartSection: View {
                         name: $0.name,
                         amount: $0.amount,
                         percent: $0.poolRatioPercent,
+                        deviationAmount: $0.deviationAmount,
                         color: $0.color
                     )
                 }
@@ -54,6 +55,7 @@ struct AllocationChartSection: View {
                         name: $0.name,
                         amount: $0.amount,
                         percent: $0.poolRatioPercent,
+                        deviationAmount: nil,
                         color: $0.color
                     )
                 }
@@ -66,6 +68,7 @@ struct AllocationChartSection: View {
                         name: $0.name,
                         amount: $0.totalAmount,
                         percent: $0.netWorthRatioPercent,
+                        deviationAmount: nil,
                         color: $0.color
                     )
                 }
@@ -101,7 +104,12 @@ struct AllocationChartSection: View {
 
     private var centerSubtitle: String? {
         if let selectedItem {
-            return Formatters.percentPoints(selectedItem.percent)
+            let pct = Formatters.percentPoints(selectedItem.percent)
+            if let devAmt = selectedItem.deviationAmount, !hideAmounts, abs(devAmt) >= 50 {
+                let tag = devAmt > 0 ? "超" : "差"
+                return "\(pct) · \(tag)\(Formatters.wholeCurrency(abs(devAmt)))"
+            }
+            return pct
         }
         if selectedLens == .investable && snapshot.hasFixedHoldings {
             return "不含固定资产"
@@ -110,7 +118,7 @@ struct AllocationChartSection: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 10) {
             if availableLenses.count > 1 {
                 Picker("分析视角", selection: $selectedLens) {
                     ForEach(availableLenses) { lens in
@@ -126,16 +134,16 @@ struct AllocationChartSection: View {
             }
 
             if chartItems.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     Image(systemName: "chart.pie")
-                        .font(.system(size: 30))
+                        .font(.title2)
                         .foregroundStyle(.tertiary)
                     Text("当前视角暂无金额")
-                        .font(.subheadline)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 180)
+                .frame(height: 140)
             } else {
                 ZStack {
                     Chart(chartItems) { item in
@@ -143,13 +151,13 @@ struct AllocationChartSection: View {
                         let isDimmed = (selectedItemID != nil && !isSelected)
                         SectorMark(
                             angle: .value("金额", item.amount),
-                            innerRadius: .ratio(0.64),
+                            innerRadius: .ratio(0.67),
                             outerRadius: .ratio(isSelected ? 1.0 : 0.94),
-                            angularInset: 1.8
+                            angularInset: 1.5
                         )
-                        .cornerRadius(5)
+                        .cornerRadius(4)
                         .foregroundStyle(item.color)
-                        .opacity(isDimmed ? 0.32 : 1.0)
+                        .opacity(isDimmed ? 0.30 : 1.0)
                     }
                     .chartLegend(.hidden)
                     .chartAngleSelection(value: $chartAngleSelection)
@@ -157,9 +165,8 @@ struct AllocationChartSection: View {
                         guard let newAngle else { return }
                         handleAngleTap(newAngle)
                     }
-                    .frame(height: 216)
+                    .frame(height: 164)
 
-                    // 圆心信息（点击圆心可取消选中恢复总计）
                     Button {
                         if selectedItemID != nil {
                             Haptics.selection()
@@ -169,14 +176,14 @@ struct AllocationChartSection: View {
                             }
                         }
                     } label: {
-                        VStack(spacing: 3) {
+                        VStack(spacing: 2) {
                             Text(centerTitle)
-                                .font(.caption.weight(.medium))
+                                .font(.caption2.weight(.medium))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
 
                             Text(Formatters.currency(centerAmount, hidden: hideAmounts, compact: true))
-                                .font(.system(.title3, design: .rounded, weight: .bold))
+                                .font(.system(.headline, design: .rounded, weight: .bold))
                                 .monospacedDigit()
                                 .foregroundStyle(.primary)
                                 .lineLimit(1)
@@ -184,19 +191,22 @@ struct AllocationChartSection: View {
 
                             if let sub = centerSubtitle {
                                 Text(sub)
-                                    .font(.caption2.weight(.medium))
+                                    .font(.system(size: 10.5, weight: .medium))
                                     .monospacedDigit()
                                     .foregroundStyle(selectedItem?.color ?? .secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
                             }
                         }
-                        .frame(maxWidth: 120)
+                        .frame(maxWidth: 108)
                     }
                     .buttonStyle(.plain)
                 }
             }
         }
-        .padding(16)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
     }
 
     private func handleAngleTap(_ angle: Double) {
@@ -212,7 +222,6 @@ struct AllocationChartSection: View {
         guard let matched else { return }
         Haptics.selection()
         withAnimation(.snappy(duration: 0.2)) {
-            // 再按同一色块即可收回取消高亮
             if selectedItemID == matched {
                 selectedItemID = nil
             } else {

@@ -155,7 +155,9 @@ struct ManagementView: View {
                     }
                 }
             }
+            .listSectionSpacing(.compact)
             .navigationTitle("管理")
+            .navigationBarTitleDisplayMode(.inline)
             .fileExporter(
                 isPresented: $showingFileExporter,
                 document: exportDocument,

@@ -25,6 +25,10 @@ struct CategoryListView: View {
         return targets.isEmpty ? nil : targets.reduce(0, +)
     }
 
+    private var investableTotal: Double {
+        holdings.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
+    }
+
     private var canReorderAnySection: Bool {
         investableCategories.count >= 2 || fixedCategories.count >= 2
     }
@@ -60,7 +64,7 @@ struct CategoryListView: View {
                 }
                 .textCase(nil)
             } footer: {
-                Text("目标占比为选填项。填写后总览页会对比实际与目标偏差；不填则只展示实际占比。")
+                Text("目标占比为选填项。填写后总览页会同步展示目标金额与实际差额。")
             }
 
             Section {
@@ -87,7 +91,9 @@ struct CategoryListView: View {
                 Text("适用于大额存单、定期存款、房产、公积金等不参与日常投资配比的资产。")
             }
         }
+        .listSectionSpacing(.compact)
         .navigationTitle("资产类别管理")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if canReorderAnySection {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -147,35 +153,39 @@ struct CategoryListView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(category.tintColor.opacity(0.15))
-                        .frame(width: 32, height: 32)
+                        .frame(width: 30, height: 30)
                     Image(systemName: category.iconName)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(category.tintColor)
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(category.name)
-                        .font(.body.weight(.medium))
+                        .font(.subheadline.weight(.medium))
                         .foregroundStyle(.primary)
                     Text("\(count) 项资产")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
 
                 Spacer()
 
                 if category.pool == .investable, let target = category.targetRatio {
-                    Text("目标 \(Formatters.percentPoints(target, digits: 0))")
-                        .font(.caption.weight(.medium))
+                    let amtText: String = {
+                        guard investableTotal > 0, !refreshStore.hideAmounts else { return "" }
+                        return " · \(Formatters.wholeCurrency(investableTotal * target / 100.0))"
+                    }()
+                    Text("目标 \(Formatters.percentPoints(target, digits: 0))\(amtText)")
+                        .font(.caption2.weight(.medium))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 7)
                         .padding(.vertical, 3)
                         .background(Color(.tertiarySystemFill), in: Capsule())
                 }
 
                 Image(systemName: "chevron.right")
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
         }

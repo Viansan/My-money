@@ -1,9 +1,10 @@
 import SwiftUI
 import SwiftData
 
-/// 资产类别管理页（支持自由增删改、切换投资池/固定池、选填目标比例与拖拽排序）
+/// 资产类别管理页（支持自由增删改、切换投资/固定资产池、选填目标比例与拖拽排序）
 struct CategoryListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
     @Query private var holdings: [AssetHolding]
 
@@ -24,6 +25,10 @@ struct CategoryListView: View {
         return targets.isEmpty ? nil : targets.reduce(0, +)
     }
 
+    private var canReorderAnySection: Bool {
+        investableCategories.count >= 2 || fixedCategories.count >= 2
+    }
+
     var body: some View {
         List {
             Section {
@@ -38,6 +43,7 @@ struct CategoryListView: View {
                 }
 
                 Button {
+                    Haptics.lightImpact()
                     showingCreatePool = .investable
                 } label: {
                     Label("新增投资资产类别", systemImage: "plus.circle.fill")
@@ -54,12 +60,12 @@ struct CategoryListView: View {
                 }
                 .textCase(nil)
             } footer: {
-                Text("目标占比为选填项。填写后总览页将对比实际占比与目标偏差；不填则仅展示实际占比。")
+                Text("目标占比为选填项。填写后总览页会对比实际与目标偏差；不填则只展示实际占比。")
             }
 
             Section {
                 if fixedCategories.isEmpty {
-                    Text("暂无固定/底仓类别")
+                    Text("暂无固定资产类别")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(fixedCategories) { category in
@@ -69,21 +75,24 @@ struct CategoryListView: View {
                 }
 
                 Button {
+                    Haptics.lightImpact()
                     showingCreatePool = .fixed
                 } label: {
-                    Label("新增固定/底仓类别", systemImage: "plus.circle.fill")
+                    Label("新增固定资产类别", systemImage: "plus.circle.fill")
                 }
             } header: {
-                Text("固定/底仓类别（独立核算，不稀释投资占比）")
+                Text("固定资产类别（不稀释投资占比）")
                     .textCase(nil)
             } footer: {
-                Text("适用于大额存单底仓、房产、车辆、公积金等不参与日常仓位调配的资产。")
+                Text("适用于大额存单、定期存款、房产、公积金等不参与日常投资配比的资产。")
             }
         }
         .navigationTitle("资产类别管理")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                EditButton()
+            if canReorderAnySection {
+                ToolbarItem(placement: .topBarTrailing) {
+                    EditButton()
+                }
             }
         }
         .sheet(item: $showingCreatePool) { pool in
@@ -102,8 +111,11 @@ struct CategoryListView: View {
         ) {
             Button("删除类别", role: .destructive) {
                 if let target = pendingDeleteCategory {
+                    let deletedName = target.name
                     modelContext.delete(target)
                     try? modelContext.save()
+                    Haptics.warning()
+                    refreshStore.showToast(style: .info, message: "已删除类别「\(deletedName)」", autoDismissSeconds: 2.2)
                 }
                 pendingDeleteCategory = nil
             }
@@ -128,6 +140,7 @@ struct CategoryListView: View {
     private func categoryRow(_ category: AssetCategory) -> some View {
         let count = holdings.filter { $0.category?.id == category.id }.count
         return Button {
+            Haptics.lightImpact()
             editingCategory = category
         } label: {
             HStack(spacing: 12) {
@@ -144,7 +157,7 @@ struct CategoryListView: View {
                     Text(category.name)
                         .font(.body.weight(.medium))
                         .foregroundStyle(.primary)
-                    Text("\(count) 项持仓")
+                    Text("\(count) 项资产")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -169,6 +182,7 @@ struct CategoryListView: View {
         .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
+                Haptics.lightImpact()
                 pendingDeleteCategory = category
             } label: {
                 Label("删除", systemImage: "trash")
@@ -184,6 +198,7 @@ struct CategoryListView: View {
             item.sortOrder = idx
         }
         try? modelContext.save()
+        Haptics.selection()
     }
 
     private func moveFixedCategories(from source: IndexSet, to destination: Int) {
@@ -194,6 +209,7 @@ struct CategoryListView: View {
             item.sortOrder = idx
         }
         try? modelContext.save()
+        Haptics.selection()
     }
 }
 
@@ -201,7 +217,9 @@ struct CategoryListView: View {
 struct CategoryEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetCategory.sortOrder) private var allCategories: [AssetCategory]
+    @Query private var allHoldings: [AssetHolding]
 
     let existingCategory: AssetCategory?
     var defaultPool: AssetPool = .investable
@@ -213,6 +231,8 @@ struct CategoryEditorSheet: View {
     @State private var iconName: String = "chart.pie.fill"
     @State private var enableTargetRatio: Bool = false
     @State private var targetRatioText: String = ""
+    @State private var showingDeleteConfirm = false
+    @State private var hasLoadedInitial = false
 
     private enum Field: Hashable {
         case name
@@ -224,11 +244,33 @@ struct CategoryEditorSheet: View {
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
     private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 6)
 
+    /// 其余已设目标的投资类别合计，方便一键填入剩余百分比
+    private var remainingTargetRatio: Double? {
+        let otherSum = allCategories
+            .filter { $0.pool == .investable && $0.id != existingCategory?.id }
+            .compactMap(\.targetRatio)
+            .reduce(0.0, +)
+        let rem = 100.0 - otherSum
+        return (otherSum > 0 && rem > 0.05 && rem <= 100) ? rem : nil
+    }
+
+    private var hasUnsavedChanges: Bool {
+        if let cat = existingCategory {
+            let parsedTarget: Double? = (pool == .investable && enableTargetRatio) ? Formatters.parseDouble(targetRatioText) : nil
+            return cat.name != name.trimmingCharacters(in: .whitespacesAndNewlines)
+                || cat.pool != pool
+                || cat.colorToken != colorToken
+                || cat.iconName != iconName
+                || cat.targetRatio != parsedTarget
+        }
+        return !name.isEmpty || enableTargetRatio
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("基本属性") {
-                    TextField("类别名称（如：海外指数、大额存单）", text: $name)
+                    TextField("类别名称（如：海外指数、定期存单）", text: $name)
                         .focused($focusedField, equals: .name)
 
                     Picker("资金池归属", selection: $pool) {
@@ -237,6 +279,9 @@ struct CategoryEditorSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: pool) { _, _ in
+                        Haptics.selection()
+                    }
 
                     Text(pool.subtitle)
                         .font(.caption)
@@ -249,7 +294,7 @@ struct CategoryEditorSheet: View {
 
                         if enableTargetRatio {
                             HStack {
-                                Text("目标占比（%）")
+                                Text("目标占比")
                                 Spacer()
                                 TextField("如 30", text: $targetRatioText)
                                     .keyboardType(.decimalPad)
@@ -258,6 +303,16 @@ struct CategoryEditorSheet: View {
                                     .focused($focusedField, equals: .targetRatio)
                                 Text("%")
                                     .foregroundStyle(.secondary)
+                            }
+
+                            if let remaining = remainingTargetRatio {
+                                Button {
+                                    Haptics.selection()
+                                    targetRatioText = Formatters.editableDecimal(remaining, maxDecimals: 1)
+                                } label: {
+                                    Label("一键填入剩余 \(Formatters.percentPoints(remaining, digits: 1))", systemImage: "wand.and.stars")
+                                        .font(.caption.weight(.medium))
+                                }
                             }
                         }
                     } header: {
@@ -269,6 +324,7 @@ struct CategoryEditorSheet: View {
                     LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(CategoryColorToken.allCases) { token in
                             Button {
+                                Haptics.selection()
                                 colorToken = token
                             } label: {
                                 ZStack {
@@ -292,6 +348,7 @@ struct CategoryEditorSheet: View {
                     LazyVGrid(columns: iconColumns, spacing: 12) {
                         ForEach(PresetIcons.categoryIcons, id: \.self) { symbol in
                             Button {
+                                Haptics.selection()
                                 iconName = symbol
                             } label: {
                                 ZStack {
@@ -308,9 +365,25 @@ struct CategoryEditorSheet: View {
                     }
                     .padding(.vertical, 6)
                 }
+
+                if existingCategory != nil {
+                    Section {
+                        Button(role: .destructive) {
+                            Haptics.lightImpact()
+                            showingDeleteConfirm = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("删除该类别")
+                                Spacer()
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle(existingCategory == nil ? "新建资产类别" : "编辑资产类别")
             .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(hasUnsavedChanges)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -326,6 +399,8 @@ struct CategoryEditorSheet: View {
                 }
             }
             .onAppear {
+                guard !hasLoadedInitial else { return }
+                hasLoadedInitial = true
                 if let cat = existingCategory {
                     name = cat.name
                     pool = cat.pool
@@ -339,6 +414,30 @@ struct CategoryEditorSheet: View {
                     pool = defaultPool
                     colorToken = defaultPool == .fixed ? .amber : .blue
                     iconName = defaultPool == .fixed ? "lock.doc.fill" : "chart.pie.fill"
+                }
+            }
+            .confirmationDialog(
+                "确认删除类别「\(existingCategory?.name ?? "")」？",
+                isPresented: $showingDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("删除类别", role: .destructive) {
+                    if let target = existingCategory {
+                        let deletedName = target.name
+                        modelContext.delete(target)
+                        try? modelContext.save()
+                        Haptics.warning()
+                        refreshStore.showToast(style: .info, message: "已删除类别「\(deletedName)」", autoDismissSeconds: 2.2)
+                    }
+                    dismiss()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                if let target = existingCategory {
+                    let count = allHoldings.filter { $0.category?.id == target.id }.count
+                    if count > 0 {
+                        Text("该类别下关联了 \(count) 项资产。删除类别不会删除资产金额，它们将变为「未分类」。")
+                    }
                 }
             }
         }
@@ -363,6 +462,8 @@ struct CategoryEditorSheet: View {
             target.iconName = iconName
             target.targetRatio = parsedTarget
             try? modelContext.save()
+            Haptics.success()
+            refreshStore.showToast(style: .success, message: "已保存类别「\(trimmed)」", autoDismissSeconds: 2.0)
             onSaved?(target)
         } else {
             let nextOrder = (allCategories.map(\.sortOrder).max() ?? -1) + 1
@@ -376,6 +477,10 @@ struct CategoryEditorSheet: View {
             )
             modelContext.insert(created)
             try? modelContext.save()
+            Haptics.success()
+            if onSaved == nil {
+                refreshStore.showToast(style: .success, message: "已新建类别「\(trimmed)」", autoDismissSeconds: 2.0)
+            }
             onSaved?(created)
         }
         dismiss()

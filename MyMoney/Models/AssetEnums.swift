@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-/// 资金池归属：将「参与配置比例的投资资产」与「大额固定/底仓资产」彻底解耦
+/// 资金池归属：将「参与配置比例的投资资产」与「大额固定资产」彻底解耦
 /// 避免房产、大额存单、专项底仓（如 100 万定期）稀释日常投资组合的配置占比
 enum AssetPool: String, Codable, CaseIterable, Identifiable {
     case investable = "investable"
@@ -14,16 +14,16 @@ enum AssetPool: String, Codable, CaseIterable, Identifiable {
         case .investable:
             return "投资资产"
         case .fixed:
-            return "固定/底仓"
+            return "固定资产"
         }
     }
 
     var subtitle: String {
         switch self {
         case .investable:
-            return "计入投资池比例，可选填目标占比"
+            return "参与投资组合比例计算，可选填目标占比"
         case .fixed:
-            return "仅计入总净值，不稀释投资组合占比"
+            return "大额存单、房产等，仅计入总净值，不稀释投资占比"
         }
     }
 
@@ -51,11 +51,11 @@ enum ValuationMode: String, Codable, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .manualAmount:
-            return "直接填金额"
+            return "按金额"
         case .exchangeSecurity:
-            return "场内证券"
+            return "场内现价"
         case .otcFund:
-            return "场外基金"
+            return "场外净值"
         }
     }
 
@@ -70,14 +70,23 @@ enum ValuationMode: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    var priceFieldLabel: String {
+        switch self {
+        case .manualAmount:
+            return "单价"
+        case .exchangeSecurity:
+            return "最新现价（元）"
+        case .otcFund:
+            return "最新净值（元）"
+        }
+    }
+
     var codePlaceholder: String {
         switch self {
         case .manualAmount:
             return ""
-        case .exchangeSecurity:
-            return "如 515800、159915、00700、SPY"
-        case .otcFund:
-            return "6 位基金代码，如 050025、003376"
+        case .exchangeSecurity, .otcFund:
+            return "输入代码自动识别（如 515800、050025、00700、SPY）"
         }
     }
 

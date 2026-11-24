@@ -2,7 +2,9 @@ import SwiftUI
 import SwiftData
 
 /// 轻点持仓弹出的快捷调数抽屉
-/// 支持「直接改总量」与「加减变动量（自动避免 iOS 数字键盘无负号痛点）」，并可一键更新单价或切换完整编辑
+/// - 实时预览「原值 -> 新值（变化量）」，防止多打一个零
+/// - 支持一键快捷步进胶囊与现价本金估算，常用调数 2 秒搞定
+/// - 未改内容随手下拉即关，改过内容防误滑丢失
 struct QuickAdjustHoldingSheet: View {
     private enum AdjustStyle: String, CaseIterable, Identifiable {
         case replaceTotal = "直接改总量"
@@ -52,14 +54,17 @@ struct QuickAdjustHoldingSheet: View {
         holding.valuationMode.usesSharesAndPrice
     }
 
+    private var parsedDeltaNumber: Double {
+        max(Formatters.parseDouble(deltaNumberText) ?? 0, 0)
+    }
+
     private var previewSharesOrAmount: Double {
         switch adjustStyle {
         case .replaceTotal:
             return max(Formatters.parseDouble(primaryNumberText) ?? 0, 0)
         case .deltaChange:
             let base = usesShares ? holding.shares : holding.manualAmount
-            let delta = max(Formatters.parseDouble(deltaNumberText) ?? 0, 0)
-            let result = deltaDirection == .add ? (base + delta) : (base - delta)
+            let result = deltaDirection == .add ? (base + parsedDeltaNumber) : (base - parsedDeltaNumber)
             return max(result, 0)
         }
     }
@@ -69,19 +74,22 @@ struct QuickAdjustHoldingSheet: View {
     }
 
     private var previewMarketValue: Double {
-        if usesShares {
-            return previewSharesOrAmount * previewUnitPrice
-        } else {
-            return previewSharesOrAmount
-        }
+        usesShares ? (previewSharesOrAmount * previewUnitPrice) : previewSharesOrAmount
+    }
+
+    private var valueChangeDelta: Double {
+        previewMarketValue - holding.marketValue
     }
 
     private var previewTotalCost: Double? {
         guard trackCost else { return nil }
-        if adjustStyle == .deltaChange, let deltaCost = Formatters.parseDouble(deltaPrincipalText), deltaCost > 0 {
-            let baseCost = holding.totalCost ?? 0
-            let updated = deltaDirection == .add ? (baseCost + deltaCost) : (baseCost - deltaCost)
-            return max(updated, 0)
+        if adjustStyle == .deltaChange {
+            if let deltaCost = Formatters.parseDouble(deltaPrincipalText), deltaCost > 0 {
+                let baseCost = holding.totalCost ?? 0
+                let updated = deltaDirection == .add ? (baseCost + deltaCost) : (baseCost - deltaCost)
+                return max(updated, 0)
+            }
+            return holding.totalCost
         }
         guard let raw = Formatters.parseDouble(costInputText), raw >= 0 else {
             return holding.totalCost
@@ -92,12 +100,41 @@ struct QuickAdjustHoldingSheet: View {
         return raw
     }
 
+    private var hasChanges: Bool {
+        let baseQuantity = usesShares ? holding.shares : holding.manualAmount
+        if abs(previewSharesOrAmount - baseQuantity) > 0.0001 { return true }
+        if usesShares && abs(previewUnitPrice - holding.latestPrice) > 0.00001 { return true }
+        switch (holding.totalCost, previewTotalCost) {
+        case (nil, nil):
+            return false
+        case (let old?, let new?):
+            return abs(old - new) > 0.01
+        default:
+            return true
+        }
+    }
+
+    private var quickStepPresets: [(label: String, amount: Double)] {
+        if usesShares {
+            return [("100份", 100), ("500份", 500), ("1000份", 1000)]
+        } else {
+            return [("1千", 1000), ("5千", 5000), ("1万", 10000)]
+        }
+    }
+
+    private var estimatedDeltaPrincipal: Double? {
+        guard adjustStyle == .deltaChange, usesShares, parsedDeltaNumber > 0, previewUnitPrice > 0 else {
+            return nil
+        }
+        return parsedDeltaNumber * previewUnitPrice
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                // 实时估值预览头
+                // 实时估值与变化量预览
                 Section {
-                    HStack {
+                    HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(holding.name)
                                 .font(.headline)
@@ -120,7 +157,12 @@ struct QuickAdjustHoldingSheet: View {
                                 .font(.system(.title3, design: .rounded, weight: .bold))
                                 .monospacedDigit()
 
-                            if let cost = previewTotalCost {
+                            if abs(valueChangeDelta) >= 0.01 {
+                                Text("变动 \(Formatters.signedCurrency(valueChangeDelta))")
+                                    .font(.caption.weight(.semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.accentColor)
+                            } else if let cost = previewTotalCost {
                                 let pnl = previewMarketValue - cost
                                 Text("盈亏 \(Formatters.signedCurrency(pnl))")
                                     .font(.caption.weight(.medium))
@@ -139,6 +181,9 @@ struct QuickAdjustHoldingSheet: View {
                         }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: adjustStyle) { _, _ in
+                        Haptics.selection()
+                    }
 
                     if adjustStyle == .replaceTotal {
                         HStack {
@@ -157,15 +202,48 @@ struct QuickAdjustHoldingSheet: View {
                             }
                         }
                         .pickerStyle(.segmented)
+                        .onChange(of: deltaDirection) { _, _ in
+                            Haptics.selection()
+                        }
 
                         HStack {
                             Text(usesShares ? "本次变动份额" : "本次变动金额")
                             Spacer()
-                            TextField(usesShares ? "输入变动份数" : "输入变动金额", text: $deltaNumberText)
+                            TextField(usesShares ? "输入份数" : "输入金额", text: $deltaNumberText)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
                                 .focused($focusedField, equals: .deltaNumber)
+                        }
+
+                        // 一键步进胶囊（常用加仓/入账直接点）
+                        HStack(spacing: 8) {
+                            ForEach(quickStepPresets, id: \.label) { preset in
+                                Button {
+                                    Haptics.selection()
+                                    let current = parsedDeltaNumber
+                                    deltaNumberText = Formatters.editableDecimal(current + preset.amount, maxDecimals: 2)
+                                } label: {
+                                    Text("\(deltaDirection == .add ? "+" : "-")\(preset.label)")
+                                        .font(.caption.weight(.medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+
+                            Spacer()
+
+                            if parsedDeltaNumber > 0 {
+                                Button("清零") {
+                                    Haptics.selection()
+                                    deltaNumberText = ""
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .buttonStyle(.plain)
+                            }
                         }
 
                         HStack {
@@ -180,7 +258,7 @@ struct QuickAdjustHoldingSheet: View {
 
                     if usesShares {
                         HStack(spacing: 10) {
-                            Text("最新单价/净值")
+                            Text(holding.valuationMode.priceFieldLabel)
                             Spacer()
                             TextField("单价", text: $unitPriceText)
                                 .keyboardType(.decimalPad)
@@ -218,18 +296,28 @@ struct QuickAdjustHoldingSheet: View {
 
                 // 选填成本调整
                 Section {
-                    Toggle("记录投入成本（计算盈亏）", isOn: $trackCost)
+                    Toggle("记录投入成本（算盈亏）", isOn: $trackCost)
 
                     if trackCost {
                         if adjustStyle == .deltaChange {
                             HStack {
-                                Text("同步\(deltaDirection == .add ? "增加" : "减少")本金（选填）")
+                                Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
                                 Spacer()
-                                TextField("不填则保持原成本", text: $deltaPrincipalText)
+                                TextField("不填保持原成本", text: $deltaPrincipalText)
                                     .keyboardType(.decimalPad)
                                     .multilineTextAlignment(.trailing)
                                     .monospacedDigit()
                                     .focused($focusedField, equals: .deltaPrincipal)
+                            }
+
+                            if let est = estimatedDeltaPrincipal {
+                                Button {
+                                    Haptics.selection()
+                                    deltaPrincipalText = Formatters.editableDecimal(est, maxDecimals: 2)
+                                } label: {
+                                    Label("按当前单价自动填入 \(Formatters.currency(est))", systemImage: "wand.and.stars")
+                                        .font(.caption.weight(.medium))
+                                }
                             }
                         } else {
                             if usesShares {
@@ -240,6 +328,7 @@ struct QuickAdjustHoldingSheet: View {
                                 }
                                 .pickerStyle(.segmented)
                                 .onChange(of: costEntryStyle) { _, newStyle in
+                                    Haptics.selection()
                                     syncCostInputField(for: newStyle)
                                 }
                             }
@@ -261,18 +350,18 @@ struct QuickAdjustHoldingSheet: View {
 
                 Section {
                     Button {
+                        Haptics.lightImpact()
+                        onRequestFullEdit()
                         dismiss()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                            onRequestFullEdit()
-                        }
                     } label: {
-                        Label("打开完整编辑（修改名称、分类、账户或备注）", systemImage: "slider.horizontal.3")
+                        Label("修改名称、分类、账户或备注...", systemImage: "slider.horizontal.3")
                             .font(.subheadline)
                     }
                 }
             }
-            .navigationTitle("快速调整")
+            .navigationTitle("快速调数")
             .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(hasChanges)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -282,6 +371,7 @@ struct QuickAdjustHoldingSheet: View {
                         saveChanges()
                     }
                     .fontWeight(.semibold)
+                    .disabled(!hasChanges)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -318,10 +408,8 @@ struct QuickAdjustHoldingSheet: View {
 
         switch style {
         case .unitCostPrice:
-            // 从总本金转为成本单价
             costInputText = Formatters.editableDecimal(currentVal / shares, maxDecimals: 4)
         case .totalPrincipal:
-            // 从成本单价转为总本金
             costInputText = Formatters.editableDecimal(currentVal * shares, maxDecimals: 2)
         }
     }
@@ -335,7 +423,9 @@ struct QuickAdjustHoldingSheet: View {
             let quote = try await refreshStore.lookupSingleQuote(code: holding.code, mode: holding.valuationMode)
             unitPriceText = Formatters.editableDecimal(quote.price, maxDecimals: 4)
             holding.priceDateText = quote.dateText
+            Haptics.success()
         } catch {
+            Haptics.warning()
             quoteErrorMessage = error.localizedDescription
         }
     }
@@ -351,6 +441,8 @@ struct QuickAdjustHoldingSheet: View {
         holding.lastUpdated = .now
 
         try? modelContext.save()
+        Haptics.success()
+        refreshStore.showToast(style: .success, message: "已更新「\(holding.name)」", autoDismissSeconds: 2.0)
         dismiss()
     }
 }

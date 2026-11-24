@@ -1,9 +1,10 @@
 import SwiftUI
 import SwiftData
 
-/// 账户 / 渠道管理页（支持自由增删改与排序）
+/// 账户 / 渠道管理页（支持自由增删改与拖拽排序，严格遵循全局隐私模式）
 struct AccountListView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetAccount.sortOrder) private var accounts: [AssetAccount]
     @Query private var holdings: [AssetHolding]
 
@@ -25,18 +26,21 @@ struct AccountListView: View {
                 }
 
                 Button {
+                    Haptics.lightImpact()
                     showingCreateSheet = true
                 } label: {
                     Label("新增存放账户", systemImage: "plus.circle.fill")
                 }
             } footer: {
-                Text("将不同券商、银行或理财平台建为独立账户后，可在「资产」页一键切为「按账户对账」，逐个核对各平台余额。")
+                Text("将不同券商、银行或理财平台建为独立账户后，可在「资产」页切为「按账户对账」，逐个核对账面余额。")
             }
         }
         .navigationTitle("账户/渠道管理")
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                EditButton()
+            if accounts.count >= 2 {
+                ToolbarItem(placement: .topBarTrailing) {
+                    EditButton()
+                }
             }
         }
         .sheet(isPresented: $showingCreateSheet) {
@@ -55,8 +59,11 @@ struct AccountListView: View {
         ) {
             Button("删除账户", role: .destructive) {
                 if let target = pendingDeleteAccount {
+                    let deletedName = target.name
                     modelContext.delete(target)
                     try? modelContext.save()
+                    Haptics.warning()
+                    refreshStore.showToast(style: .info, message: "已删除账户「\(deletedName)」", autoDismissSeconds: 2.2)
                 }
                 pendingDeleteAccount = nil
             }
@@ -78,6 +85,7 @@ struct AccountListView: View {
         let sum = accHoldings.reduce(0.0) { $0 + $1.marketValue }
 
         return Button {
+            Haptics.lightImpact()
             editingAccount = account
         } label: {
             HStack(spacing: 12) {
@@ -107,7 +115,7 @@ struct AccountListView: View {
 
                 Spacer()
 
-                Text(Formatters.currency(sum, compact: true))
+                Text(Formatters.currency(sum, hidden: refreshStore.hideAmounts, compact: true))
                     .font(.caption.weight(.medium))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
@@ -120,6 +128,7 @@ struct AccountListView: View {
         .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
+                Haptics.lightImpact()
                 pendingDeleteAccount = account
             } label: {
                 Label("删除", systemImage: "trash")
@@ -134,6 +143,7 @@ struct AccountListView: View {
             item.sortOrder = idx
         }
         try? modelContext.save()
+        Haptics.selection()
     }
 }
 
@@ -141,7 +151,9 @@ struct AccountListView: View {
 struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Environment(PortfolioRefreshStore.self) private var refreshStore
     @Query(sort: \AssetAccount.sortOrder) private var allAccounts: [AssetAccount]
+    @Query private var allHoldings: [AssetHolding]
 
     let existingAccount: AssetAccount?
     var onSaved: ((AssetAccount) -> Void)? = nil
@@ -150,6 +162,8 @@ struct AccountEditorSheet: View {
     @State private var subtitle: String = ""
     @State private var colorToken: CategoryColorToken = .indigo
     @State private var iconName: String = "building.columns.fill"
+    @State private var showingDeleteConfirm = false
+    @State private var hasLoadedInitial = false
 
     private enum Field: Hashable {
         case name
@@ -160,6 +174,16 @@ struct AccountEditorSheet: View {
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
     private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+
+    private var hasUnsavedChanges: Bool {
+        if let acc = existingAccount {
+            return acc.name != name.trimmingCharacters(in: .whitespacesAndNewlines)
+                || acc.subtitle != subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                || acc.colorToken != colorToken
+                || acc.iconName != iconName
+        }
+        return !name.isEmpty || !subtitle.isEmpty
+    }
 
     var body: some View {
         NavigationStack {
@@ -176,6 +200,7 @@ struct AccountEditorSheet: View {
                     LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(CategoryColorToken.allCases) { token in
                             Button {
+                                Haptics.selection()
                                 colorToken = token
                             } label: {
                                 ZStack {
@@ -199,6 +224,7 @@ struct AccountEditorSheet: View {
                     LazyVGrid(columns: iconColumns, spacing: 12) {
                         ForEach(PresetIcons.accountIcons, id: \.self) { symbol in
                             Button {
+                                Haptics.selection()
                                 iconName = symbol
                             } label: {
                                 ZStack {
@@ -215,9 +241,25 @@ struct AccountEditorSheet: View {
                     }
                     .padding(.vertical, 6)
                 }
+
+                if existingAccount != nil {
+                    Section {
+                        Button(role: .destructive) {
+                            Haptics.lightImpact()
+                            showingDeleteConfirm = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("删除该账户")
+                                Spacer()
+                            }
+                        }
+                    }
+                }
             }
             .navigationTitle(existingAccount == nil ? "新建账户" : "编辑账户")
             .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(hasUnsavedChanges)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -233,11 +275,37 @@ struct AccountEditorSheet: View {
                 }
             }
             .onAppear {
+                guard !hasLoadedInitial else { return }
+                hasLoadedInitial = true
                 if let acc = existingAccount {
                     name = acc.name
                     subtitle = acc.subtitle
                     colorToken = acc.colorToken
                     iconName = acc.iconName
+                }
+            }
+            .confirmationDialog(
+                "确认删除账户「\(existingAccount?.name ?? "")」？",
+                isPresented: $showingDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("删除账户", role: .destructive) {
+                    if let target = existingAccount {
+                        let deletedName = target.name
+                        modelContext.delete(target)
+                        try? modelContext.save()
+                        Haptics.warning()
+                        refreshStore.showToast(style: .info, message: "已删除账户「\(deletedName)」", autoDismissSeconds: 2.2)
+                    }
+                    dismiss()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                if let target = existingAccount {
+                    let count = allHoldings.filter { $0.account?.id == target.id }.count
+                    if count > 0 {
+                        Text("该账户下有 \(count) 项资产。删除账户不会删除资产，它们将变为「未指定账户」。")
+                    }
                 }
             }
         }
@@ -253,6 +321,8 @@ struct AccountEditorSheet: View {
             target.colorToken = colorToken
             target.iconName = iconName
             try? modelContext.save()
+            Haptics.success()
+            refreshStore.showToast(style: .success, message: "已保存账户「\(trimmed)」", autoDismissSeconds: 2.0)
             onSaved?(target)
         } else {
             let nextOrder = (allAccounts.map(\.sortOrder).max() ?? -1) + 1
@@ -265,6 +335,10 @@ struct AccountEditorSheet: View {
             )
             modelContext.insert(created)
             try? modelContext.save()
+            Haptics.success()
+            if onSaved == nil {
+                refreshStore.showToast(style: .success, message: "已新建账户「\(trimmed)」", autoDismissSeconds: 2.0)
+            }
             onSaved?(created)
         }
         dismiss()

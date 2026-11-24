@@ -3,6 +3,9 @@ import SwiftData
 import UniformTypeIdentifiers
 
 /// Tab 3：分类/账户管理、外观偏好与离线 JSON 备份恢复页
+/// - 常规成功提示改用非阻塞 Toast，不打断用户操作
+/// - 导入恢复前先预解析备份，确认弹窗里明示备份时间与条数
+/// - 真实资产非空时隐藏演示数据按钮，防止误碰污染账本；危险清空独立隔离
 struct ManagementView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PortfolioRefreshStore.self) private var refreshStore
@@ -15,12 +18,15 @@ struct ManagementView: View {
     @State private var showingFileExporter = false
     @State private var showingFileImporter = false
 
-    @State private var pendingImportData: Data?
+    @State private var pendingImportPayload: BackupPayload?
     @State private var showingRestoreConfirm = false
     @State private var showingClearHoldingsConfirm = false
 
-    @State private var alertTitle: String = ""
-    @State private var alertMessage: String?
+    @State private var errorAlertMessage: String?
+
+    private var totalAmount: Double {
+        holdings.reduce(0.0) { $0 + $1.marketValue }
+    }
 
     var body: some View {
         @Bindable var bindableStore = refreshStore
@@ -28,7 +34,7 @@ struct ManagementView: View {
         NavigationStack {
             List {
                 // 1. 字典维度管理
-                Section("分类与账户字典") {
+                Section("分类与账户") {
                     NavigationLink {
                         CategoryListView()
                     } label: {
@@ -74,61 +80,79 @@ struct ManagementView: View {
                 // 3. 本地 JSON 备份与恢复
                 Section {
                     Button {
+                        Haptics.lightImpact()
                         prepareAndExportBackup()
                     } label: {
                         Label("导出 JSON 备份文件", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
+                        Haptics.lightImpact()
                         showingFileImporter = true
                     } label: {
                         Label("从 JSON 备份恢复数据", systemImage: "square.and.arrow.down")
                     }
                 } header: {
-                    Text("本地数据备份")
+                    Text("本地备份")
                 } footer: {
-                    Text("所有资产数据 100% 存储在手机本地，无需注册或上传云端。更换手机或重装前建议导出 JSON 备份至 iCloud 云盘或文件 App。")
+                    Text("数据 100% 存在本机，不上传云端。换机或重装前建议导出备份至「文件」或 iCloud 云盘。")
                 }
 
-                // 4. 辅助与清空
-                Section("数据维护") {
-                    Button {
-                        do {
-                            try DataBackupService.loadSampleShowcase(in: modelContext)
-                            showAlert(title: "已载入演示数据", message: "包含投资资产与一笔 100 万固定底仓示例，可在总览页查看双池隔离效果。")
-                        } catch {
-                            showAlert(title: "载入失败", message: error.localizedDescription)
+                // 4. 空账本时才出现演示体验入口（已有真实资产后隐藏，杜绝误点污染账本）
+                if holdings.isEmpty {
+                    Section("快速体验") {
+                        Button {
+                            do {
+                                try DataBackupService.loadSampleShowcase(in: modelContext)
+                                Haptics.success()
+                                refreshStore.showToast(
+                                    style: .success,
+                                    message: "已载入演示数据，可去「总览」查看双池隔离效果",
+                                    autoDismissSeconds: 3.0
+                                )
+                            } catch {
+                                errorAlertMessage = error.localizedDescription
+                            }
+                        } label: {
+                            Label("载入演示数据", systemImage: "wand.and.stars")
                         }
-                    } label: {
-                        Label("追加演示数据", systemImage: "wand.and.stars")
                     }
-
-                    Button(role: .destructive) {
-                        showingClearHoldingsConfirm = true
-                    } label: {
-                        Label("清空全部持仓记录", systemImage: "trash")
-                    }
-                    .disabled(holdings.isEmpty)
                 }
 
                 Section {
                     HStack {
-                        Text("存储模式")
+                        Text("存储方式")
                         Spacer()
-                        Text("SwiftData 纯本地存储")
+                        Text("SwiftData 纯本地")
                             .foregroundStyle(.secondary)
                     }
                     .font(.footnote)
 
                     HStack {
-                        Text("行情数据源")
+                        Text("行情来源")
                         Spacer()
-                        Text("腾讯行情 / 天天基金官方净值")
+                        Text("腾讯行情 · 东财官方净值")
                             .foregroundStyle(.secondary)
                     }
                     .font(.footnote)
                 } header: {
                     Text("关于")
+                }
+
+                // 5. 危险操作独立隔离在页面最底部，且仅在有持仓时出现
+                if !holdings.isEmpty {
+                    Section {
+                        Button(role: .destructive) {
+                            Haptics.warning()
+                            showingClearHoldingsConfirm = true
+                        } label: {
+                            Label("清空全部持仓记录", systemImage: "trash")
+                        }
+                    } header: {
+                        Text("危险操作")
+                    } footer: {
+                        Text("清空前建议先导出 JSON 备份。此操作会删除所有资产金额，但保留自定义分类与账户。")
+                    }
                 }
             }
             .navigationTitle("管理")
@@ -140,9 +164,10 @@ struct ManagementView: View {
             ) { result in
                 switch result {
                 case .success:
-                    showAlert(title: "备份导出成功", message: "JSON 备份文件已保存。")
+                    Haptics.success()
+                    refreshStore.showToast(style: .success, message: "JSON 备份文件已保存", autoDismissSeconds: 2.4)
                 case .failure(let error):
-                    showAlert(title: "导出失败", message: error.localizedDescription)
+                    errorAlertMessage = "导出失败：\(error.localizedDescription)"
                 }
             }
             .fileImporter(
@@ -153,7 +178,7 @@ struct ManagementView: View {
                 handleImportedFile(result)
             }
             .confirmationDialog(
-                "确认用备份文件覆盖当前全部数据？",
+                "确认用备份覆盖当前全部数据？",
                 isPresented: $showingRestoreConfirm,
                 titleVisibility: .visible
             ) {
@@ -161,32 +186,40 @@ struct ManagementView: View {
                     performRestore()
                 }
                 Button("取消", role: .cancel) {
-                    pendingImportData = nil
+                    pendingImportPayload = nil
                 }
             } message: {
-                Text("当前手机上的所有分类、账户与持仓将被替换为备份文件中的内容。")
+                if let payload = pendingImportPayload {
+                    Text("备份时间 \(Formatters.shortDateTime(payload.exportedAt))，包含 \(payload.categories.count) 个类别、\(payload.accounts.count) 个账户、\(payload.holdings.count) 项资产。恢复将替换当前 \(holdings.count) 项资产。")
+                }
             }
             .confirmationDialog(
-                "确认清空全部 \(holdings.count) 项持仓？",
+                "确认清空全部 \(holdings.count) 项资产？",
                 isPresented: $showingClearHoldingsConfirm,
                 titleVisibility: .visible
             ) {
-                Button("清空持仓（保留分类和账户）", role: .destructive) {
+                Button("确认清空（不可撤销）", role: .destructive) {
                     do {
+                        let count = holdings.count
                         try DataBackupService.clearAllHoldings(in: modelContext)
+                        refreshStore.clearDrilldown()
+                        Haptics.warning()
+                        refreshStore.showToast(style: .info, message: "已清空 \(count) 项资产记录", autoDismissSeconds: 2.5)
                     } catch {
-                        showAlert(title: "清空失败", message: error.localizedDescription)
+                        errorAlertMessage = "清空失败：\(error.localizedDescription)"
                     }
                 }
                 Button("取消", role: .cancel) {}
-            }
-            .alert(alertTitle, isPresented: Binding(
-                get: { alertMessage != nil },
-                set: { if !$0 { alertMessage = nil } }
-            )) {
-                Button("好", role: .cancel) { alertMessage = nil }
             } message: {
-                Text(alertMessage ?? "")
+                Text("当前总资产 \(Formatters.currency(totalAmount, hidden: refreshStore.hideAmounts)) 将被清零，自定义的分类与账户结构会保留。")
+            }
+            .alert("操作失败", isPresented: Binding(
+                get: { errorAlertMessage != nil },
+                set: { if !$0 { errorAlertMessage = nil } }
+            )) {
+                Button("好", role: .cancel) { errorAlertMessage = nil }
+            } message: {
+                Text(errorAlertMessage ?? "")
             }
         }
     }
@@ -201,14 +234,14 @@ struct ManagementView: View {
             exportDocument = try BackupDocument(payload: payload)
             showingFileExporter = true
         } catch {
-            showAlert(title: "生成备份失败", message: error.localizedDescription)
+            errorAlertMessage = "生成备份失败：\(error.localizedDescription)"
         }
     }
 
     private func handleImportedFile(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
-            showAlert(title: "读取文件失败", message: error.localizedDescription)
+            errorAlertMessage = "读取文件失败：\(error.localizedDescription)"
         case .success(let urls):
             guard let fileURL = urls.first else { return }
             let accessed = fileURL.startAccessingSecurityScopedResource()
@@ -217,31 +250,33 @@ struct ManagementView: View {
             }
             do {
                 let data = try Data(contentsOf: fileURL)
-                pendingImportData = data
+                // 先校验解析再弹窗确认，让用户看到确切的备份内容摘要
+                let parsed = try DataBackupService.parseBackup(from: data)
+                pendingImportPayload = parsed
                 showingRestoreConfirm = true
             } catch {
-                showAlert(title: "无法读取所选文件", message: error.localizedDescription)
+                Haptics.warning()
+                errorAlertMessage = "所选文件不是有效的「我的资产」JSON 备份文件。"
             }
         }
     }
 
     private func performRestore() {
-        guard let data = pendingImportData else { return }
-        defer { pendingImportData = nil }
+        guard let payload = pendingImportPayload else { return }
+        defer { pendingImportPayload = nil }
 
         do {
-            let counts = try DataBackupService.restoreBackup(from: data, into: modelContext)
-            showAlert(
-                title: "恢复成功",
-                message: "已成功导入 \(counts.categories) 个类别、\(counts.accounts) 个账户、\(counts.holdings) 项资产持仓。"
+            let counts = try DataBackupService.restoreBackup(payload: payload, into: modelContext)
+            refreshStore.clearDrilldown()
+            Haptics.success()
+            refreshStore.showToast(
+                style: .success,
+                message: "已恢复 \(counts.holdings) 项资产、\(counts.categories) 个类别、\(counts.accounts) 个账户",
+                autoDismissSeconds: 3.0
             )
         } catch {
-            showAlert(title: "备份文件格式无效", message: error.localizedDescription)
+            Haptics.warning()
+            errorAlertMessage = "恢复失败：\(error.localizedDescription)"
         }
-    }
-
-    private func showAlert(title: String, message: String) {
-        alertTitle = title
-        alertMessage = message
     }
 }

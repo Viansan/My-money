@@ -2,8 +2,16 @@ import SwiftUI
 import SwiftData
 
 /// 新增或完整编辑单条资产表单页
-/// 支持代码自动识别名称与单价、页内直接新建分类/账户、选填成本等完整 CRUD 能力
+/// - 简化为「按金额」与「证券 / 基金」两档，系统自动识别场内现价或场外净值
+/// - 输入代码停顿 0.45 秒自动识别名称与价格，无需用户先选市场再点按钮
+/// - 仅在极少数重码（如 000001 或 LOF）时弹出双候选轻点切换
 struct HoldingFormSheet: View {
+    private enum EntryKind: String, CaseIterable, Identifiable {
+        case manualAmount = "按金额"
+        case quoteTracked = "证券 / 基金"
+        var id: String { rawValue }
+    }
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(PortfolioRefreshStore.self) private var refreshStore
@@ -15,10 +23,15 @@ struct HoldingFormSheet: View {
     let existingHolding: AssetHolding?
     var preselectedCategory: AssetCategory? = nil
     var preselectedAccount: AssetAccount? = nil
+    var preselectedPool: AssetPool = .investable
 
-    @State private var valuationMode: ValuationMode = .manualAmount
+    @State private var entryKind: EntryKind = .manualAmount
+    /// 系统自动识别出的真实底层模式（.exchangeSecurity 或 .otcFund）
+    @State private var resolvedQuoteMode: ValuationMode = .exchangeSecurity
+
     @State private var code: String = ""
     @State private var name: String = ""
+    @State private var userEditedName: Bool = false
     @State private var sharesText: String = ""
     @State private var latestPriceText: String = "1"
     @State private var manualAmountText: String = ""
@@ -33,8 +46,12 @@ struct HoldingFormSheet: View {
     @State private var note: String = ""
 
     @State private var isLookingUpQuote: Bool = false
-    @State private var lookupFeedback: String?
+    @State private var lookupCandidates: [QuoteResult] = []
+    @State private var lookupStatusText: String?
     @State private var lookupIsError: Bool = false
+    @State private var debounceLookupTask: Task<Void, Never>?
+    @State private var lastResolvedCode: String = ""
+    @State private var hasLoadedInitial: Bool = false
 
     @State private var showingNewCategorySheet = false
     @State private var showingNewAccountSheet = false
@@ -54,6 +71,10 @@ struct HoldingFormSheet: View {
 
     private var isEditing: Bool { existingHolding != nil }
 
+    private var effectiveValuationMode: ValuationMode {
+        entryKind == .manualAmount ? .manualAmount : resolvedQuoteMode
+    }
+
     private var parsedShares: Double {
         max(Formatters.parseDouble(sharesText) ?? 0, 0)
     }
@@ -67,14 +88,14 @@ struct HoldingFormSheet: View {
     }
 
     private var previewMarketValue: Double {
-        valuationMode.usesSharesAndPrice ? (parsedShares * parsedPrice) : parsedManualAmount
+        entryKind == .quoteTracked ? (parsedShares * parsedPrice) : parsedManualAmount
     }
 
     private var computedTotalCost: Double? {
         guard trackCost, let val = Formatters.parseDouble(costInputText), val >= 0 else {
             return nil
         }
-        if valuationMode.usesSharesAndPrice && costEntryStyle == .unitCostPrice {
+        if entryKind == .quoteTracked && costEntryStyle == .unitCostPrice {
             return parsedShares * val
         }
         return val
@@ -84,56 +105,130 @@ struct HoldingFormSheet: View {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var hasUnsavedChanges: Bool {
+        if let item = existingHolding {
+            return item.name != name.trimmingCharacters(in: .whitespacesAndNewlines)
+                || item.valuationMode != effectiveValuationMode
+                || item.code != (entryKind == .quoteTracked ? code.trimmingCharacters(in: .whitespacesAndNewlines) : "")
+                || abs(item.shares - (entryKind == .quoteTracked ? parsedShares : 0)) > 0.001
+                || abs(item.manualAmount - (entryKind == .manualAmount ? parsedManualAmount : 0)) > 0.01
+                || item.category?.id != selectedCategoryID
+                || item.account?.id != selectedAccountID
+                || item.note != note.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return !name.isEmpty || !code.isEmpty || !sharesText.isEmpty || !manualAmountText.isEmpty || !note.isEmpty
+    }
+
     var body: some View {
         NavigationStack {
             Form {
-                // 1. 计价模式与行情自动识别
+                // 1. 计价方式与智能代码识别
                 Section {
-                    Picker("计价方式", selection: $valuationMode) {
-                        ForEach(ValuationMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                    Picker("记录方式", selection: $entryKind) {
+                        ForEach(EntryKind.allCases) { kind in
+                            Text(kind.rawValue).tag(kind)
                         }
                     }
                     .pickerStyle(.segmented)
+                    .onChange(of: entryKind) { _, _ in
+                        Haptics.selection()
+                    }
 
-                    if valuationMode.usesSharesAndPrice {
+                    if entryKind == .quoteTracked {
                         HStack(spacing: 8) {
-                            TextField(valuationMode.codePlaceholder, text: $code)
+                            TextField("输入代码自动识别（515800、050025、SPY）", text: $code)
                                 .textInputAutocapitalization(.characters)
                                 .autocorrectionDisabled()
                                 .focused($focusedField, equals: .code)
-
-                            Button {
-                                Task { await lookupQuoteAndFill() }
-                            } label: {
-                                if isLookingUpQuote {
-                                    ProgressView()
-                                } else {
-                                    Text("自动识别")
-                                        .font(.caption.weight(.semibold))
+                                .onChange(of: code) { _, newValue in
+                                    scheduleAutoLookupIfAppropriate(for: newValue)
                                 }
+
+                            if isLookingUpQuote {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else if !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Button {
+                                    Task { await performSmartLookup(rawCode: code, force: true) }
+                                } label: {
+                                    Image(systemName: "arrow.clockwise.circle.fill")
+                                        .font(.title3)
+                                        .foregroundStyle(Color.accentColor)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("重新识别行情")
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isLookingUpQuote)
                         }
 
-                        if let lookupFeedback {
-                            Text(lookupFeedback)
-                                .font(.caption)
-                                .foregroundStyle(lookupIsError ? .orange : .secondary)
+                        // 仅在极少数真实重码（如 000001 / LOF）时显示 1 键切换候选
+                        if lookupCandidates.count > 1 {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("检测到同名场内与场外标的，点选你实际持有的渠道：")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+
+                                ForEach(lookupCandidates) { candidate in
+                                    let isSelected = (candidate.mode == resolvedQuoteMode)
+                                    Button {
+                                        Haptics.selection()
+                                        applyCandidate(candidate, overwriteName: true)
+                                    } label: {
+                                        HStack {
+                                            Text(candidate.mode.title)
+                                                .font(.caption2.weight(.semibold))
+                                                .foregroundStyle(isSelected ? .white : Color.accentColor)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(
+                                                    isSelected ? Color.accentColor : Color.accentColor.opacity(0.14),
+                                                    in: RoundedRectangle(cornerRadius: 4)
+                                                )
+                                            Text(candidate.name)
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Spacer()
+                                            Text("¥\(Formatters.unitPrice(candidate.price))")
+                                                .font(.caption.weight(.semibold))
+                                                .monospacedDigit()
+                                                .foregroundStyle(.primary)
+                                        }
+                                        .padding(8)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .fill(isSelected ? Color.accentColor.opacity(0.1) : Color(.tertiarySystemFill))
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        } else if let lookupStatusText {
+                            HStack(spacing: 6) {
+                                Image(systemName: lookupIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(lookupIsError ? .orange : .green)
+                                Text(lookupStatusText)
+                                    .font(.caption)
+                                    .foregroundStyle(lookupIsError ? .orange : .secondary)
+                            }
                         }
                     }
 
-                    TextField("资产名称（如：中证800ETF、三年期存单）", text: $name)
+                    TextField(entryKind == .manualAmount ? "资产名称（必填，如：活期存款、三年期存单）" : "名称（输入代码后自动填充，也可自定）", text: $name)
                         .focused($focusedField, equals: .name)
+                        .onChange(of: name) { _, newValue in
+                            if focusedField == .name {
+                                userEditedName = !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            }
+                        }
                 } header: {
                     Text("基本信息")
                 }
 
-                // 2. 金额或份额明细
+                // 2. 当前价值
                 Section {
-                    if valuationMode.usesSharesAndPrice {
+                    if entryKind == .quoteTracked {
                         HStack {
                             Text("持有份额 / 股数")
                             Spacer()
@@ -145,7 +240,7 @@ struct HoldingFormSheet: View {
                         }
 
                         HStack {
-                            Text(valuationMode == .otcFund ? "最新单位净值" : "最新单价（元）")
+                            Text(resolvedQuoteMode.priceFieldLabel)
                             Spacer()
                             TextField("1.0000", text: $latestPriceText)
                                 .keyboardType(.decimalPad)
@@ -177,7 +272,7 @@ struct HoldingFormSheet: View {
                     Text("当前价值")
                 }
 
-                // 3. 归属分类与存放账户（支持不跳出页面直接新建）
+                // 3. 归属分类与存放账户
                 Section {
                     Picker("资产类别", selection: $selectedCategoryID) {
                         Text("未分类").tag(UUID?.none)
@@ -208,34 +303,35 @@ struct HoldingFormSheet: View {
                             .font(.footnote)
                     }
                 } header: {
-                    Text("分类与账户归属")
+                    Text("归属维度")
                 } footer: {
                     if let selectedCat = categories.first(where: { $0.id == selectedCategoryID }) {
                         Text(selectedCat.pool == .fixed
-                             ? "当前所选类别归属「固定/底仓」，计入全部总净值，不会稀释日常投资组合的配置占比。"
-                             : "当前所选类别归属「投资资产」，参与投资组合结构占比计算。")
+                             ? "归属「固定资产」，计入总净值，不稀释投资组合占比。"
+                             : "归属「投资资产」，计入投资组合结构占比。")
                     }
                 }
 
                 // 4. 选填成本与备注
                 Section {
-                    Toggle("记录成本以展示盈亏（选填）", isOn: $trackCost)
+                    Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost)
 
                     if trackCost {
-                        if valuationMode.usesSharesAndPrice {
-                            Picker("成本录入方式", selection: $costEntryStyle) {
+                        if entryKind == .quoteTracked {
+                            Picker("成本口径", selection: $costEntryStyle) {
                                 ForEach(CostEntryStyle.allCases) { style in
                                     Text(style.title).tag(style)
                                 }
                             }
                             .pickerStyle(.segmented)
                             .onChange(of: costEntryStyle) { _, newStyle in
+                                Haptics.selection()
                                 convertCostStyle(to: newStyle)
                             }
                         }
 
                         HStack {
-                            Text(valuationMode.usesSharesAndPrice && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
+                            Text(entryKind == .quoteTracked && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
                             Spacer()
                             TextField("0.00", text: $costInputText)
                                 .keyboardType(.decimalPad)
@@ -258,7 +354,7 @@ struct HoldingFormSheet: View {
                         }
                     }
 
-                    TextField("备注（选填，如定存到期日、限购说明等）", text: $note)
+                    TextField("备注（选填，如定存到期日等）", text: $note)
                         .focused($focusedField, equals: .note)
                 } header: {
                     Text("选填信息")
@@ -267,6 +363,7 @@ struct HoldingFormSheet: View {
                 if isEditing {
                     Section {
                         Button(role: .destructive) {
+                            Haptics.lightImpact()
                             showingDeleteConfirm = true
                         } label: {
                             HStack {
@@ -280,6 +377,7 @@ struct HoldingFormSheet: View {
             }
             .navigationTitle(isEditing ? "编辑资产" : "新增资产")
             .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(hasUnsavedChanges)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -294,9 +392,12 @@ struct HoldingFormSheet: View {
                     Button("完成") { focusedField = nil }
                 }
             }
-            .onAppear(perform: loadInitialData)
+            .onAppear(perform: loadInitialDataIfNeeded)
+            .onDisappear {
+                debounceLookupTask?.cancel()
+            }
             .sheet(isPresented: $showingNewCategorySheet) {
-                CategoryEditorSheet(existingCategory: nil) { created in
+                CategoryEditorSheet(existingCategory: nil, defaultPool: preselectedPool) { created in
                     selectedCategoryID = created.id
                 }
             }
@@ -305,11 +406,10 @@ struct HoldingFormSheet: View {
                     selectedAccountID = created.id
                 }
             }
-            .confirmationDialog("确认删除该笔资产？", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
-                Button("删除资产", role: .destructive) {
+            .confirmationDialog("确认删除「\(existingHolding?.name ?? "")」？", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
+                Button("删除（5 秒内可撤销）", role: .destructive) {
                     if let existingHolding {
-                        modelContext.delete(existingHolding)
-                        try? modelContext.save()
+                        refreshStore.deleteHoldingWithUndo(existingHolding, in: modelContext)
                     }
                     dismiss()
                 }
@@ -318,11 +418,19 @@ struct HoldingFormSheet: View {
         }
     }
 
-    private func loadInitialData() {
+    // MARK: - 初始化与自动识别逻辑
+
+    private func loadInitialDataIfNeeded() {
+        guard !hasLoadedInitial else { return }
+        hasLoadedInitial = true
+
         if let item = existingHolding {
-            valuationMode = item.valuationMode
+            entryKind = item.valuationMode.usesSharesAndPrice ? .quoteTracked : .manualAmount
+            resolvedQuoteMode = item.valuationMode.usesSharesAndPrice ? item.valuationMode : .exchangeSecurity
             code = item.code
+            lastResolvedCode = item.code
             name = item.name
+            userEditedName = !item.name.isEmpty
             sharesText = item.shares > 0 ? Formatters.editableDecimal(item.shares, maxDecimals: 2) : ""
             latestPriceText = Formatters.editableDecimal(item.latestPrice, maxDecimals: 4)
             manualAmountText = item.manualAmount > 0 ? Formatters.editableDecimal(item.manualAmount, maxDecimals: 2) : ""
@@ -337,9 +445,98 @@ struct HoldingFormSheet: View {
                 costInputText = Formatters.editableDecimal(cost, maxDecimals: 2)
             }
         } else {
-            selectedCategoryID = (preselectedCategory ?? categories.first)?.id
+            if let preCat = preselectedCategory {
+                selectedCategoryID = preCat.id
+            } else if let poolMatch = categories.first(where: { $0.pool == preselectedPool }) {
+                selectedCategoryID = poolMatch.id
+            } else {
+                selectedCategoryID = categories.first?.id
+            }
             selectedAccountID = (preselectedAccount ?? accounts.first)?.id
         }
+    }
+
+    /// 输入代码停顿 0.45 秒自动识别（仅在形态完整时触发，不打扰用户输入过程）
+    private func scheduleAutoLookupIfAppropriate(for raw: String) {
+        debounceLookupTask?.cancel()
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            lookupCandidates = []
+            lookupStatusText = nil
+            return
+        }
+        guard cleaned != lastResolvedCode else { return }
+
+        let isCompletePattern: Bool = {
+            if cleaned.allSatisfy({ $0.isNumber }) {
+                return cleaned.count == 5 || cleaned.count == 6
+            }
+            if cleaned.allSatisfy({ $0.isLetter }) {
+                return cleaned.count >= 2 && cleaned.count <= 5
+            }
+            let lower = cleaned.lowercased()
+            if lower.hasPrefix("sh") || lower.hasPrefix("sz") || lower.hasPrefix("bj") || lower.hasPrefix("jj") {
+                return cleaned.count == 8
+            }
+            if lower.hasPrefix("hk") {
+                return cleaned.count == 7
+            }
+            if lower.hasPrefix("us") {
+                return cleaned.count >= 4
+            }
+            return false
+        }()
+
+        guard isCompletePattern else { return }
+
+        debounceLookupTask = Task {
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled else { return }
+            await performSmartLookup(rawCode: cleaned, force: false)
+        }
+    }
+
+    private func performSmartLookup(rawCode: String, force: Bool) async {
+        let cleaned = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return }
+        if !force && cleaned == lastResolvedCode { return }
+
+        isLookingUpQuote = true
+        lookupStatusText = nil
+        lookupIsError = false
+        defer { isLookingUpQuote = false }
+
+        do {
+            let candidates = try await refreshStore.lookupSmartCandidates(code: cleaned)
+            guard !Task.isCancelled else { return }
+            lastResolvedCode = cleaned
+            lookupCandidates = candidates
+
+            if let primary = candidates.first {
+                applyCandidate(primary, overwriteName: !userEditedName || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Haptics.success()
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            lookupCandidates = []
+            lookupStatusText = error.localizedDescription
+            lookupIsError = true
+            Haptics.warning()
+        }
+    }
+
+    private func applyCandidate(_ candidate: QuoteResult, overwriteName: Bool) {
+        resolvedQuoteMode = candidate.mode
+        if overwriteName {
+            name = candidate.name
+            userEditedName = false
+        }
+        latestPriceText = Formatters.editableDecimal(candidate.price, maxDecimals: 4)
+        priceDateText = candidate.dateText
+
+        let dateSuffix = candidate.dateText.isEmpty ? "" : " · \(candidate.dateText)"
+        lookupStatusText = "已自动识别为\(candidate.mode.title)：¥\(Formatters.unitPrice(candidate.price))\(dateSuffix)"
+        lookupIsError = false
     }
 
     private func convertCostStyle(to newStyle: CostEntryStyle) {
@@ -352,43 +549,23 @@ struct HoldingFormSheet: View {
         }
     }
 
-    private func lookupQuoteAndFill() async {
-        isLookingUpQuote = true
-        lookupFeedback = nil
-        lookupIsError = false
-        defer { isLookingUpQuote = false }
-
-        do {
-            let quote = try await refreshStore.lookupSingleQuote(code: code, mode: valuationMode)
-            name = quote.name
-            latestPriceText = Formatters.editableDecimal(quote.price, maxDecimals: 4)
-            priceDateText = quote.dateText
-            let dateInfo = quote.dateText.isEmpty ? "" : "（\(quote.dateText)）"
-            lookupFeedback = "已获取：\(quote.name)，单价 \(Formatters.unitPrice(quote.price))\(dateInfo)"
-            lookupIsError = false
-        } catch {
-            lookupFeedback = error.localizedDescription
-            lookupIsError = true
-        }
-    }
-
     private func saveHolding() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
         let chosenCategory = categories.first(where: { $0.id == selectedCategoryID })
         let chosenAccount = accounts.first(where: { $0.id == selectedAccountID })
-        let cleanedCode = valuationMode.usesSharesAndPrice ? code.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let cleanedCode = entryKind == .quoteTracked ? code.trimmingCharacters(in: .whitespacesAndNewlines) : ""
 
         if let target = existingHolding {
             target.name = trimmedName
-            target.valuationMode = valuationMode
+            target.valuationMode = effectiveValuationMode
             target.code = cleanedCode
-            target.shares = valuationMode.usesSharesAndPrice ? parsedShares : 0
-            target.latestPrice = valuationMode.usesSharesAndPrice ? parsedPrice : 1.0
-            target.manualAmount = valuationMode.usesSharesAndPrice ? 0 : parsedManualAmount
+            target.shares = entryKind == .quoteTracked ? parsedShares : 0
+            target.latestPrice = entryKind == .quoteTracked ? parsedPrice : 1.0
+            target.manualAmount = entryKind == .manualAmount ? parsedManualAmount : 0
             target.totalCost = computedTotalCost
-            target.priceDateText = valuationMode.usesSharesAndPrice ? priceDateText : ""
+            target.priceDateText = entryKind == .quoteTracked ? priceDateText : ""
             target.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
             target.assignCategory(chosenCategory)
             target.account = chosenAccount
@@ -397,17 +574,17 @@ struct HoldingFormSheet: View {
             let nextOrder = (allHoldings.map(\.sortOrder).max() ?? -1) + 1
             let created = AssetHolding(
                 name: trimmedName,
-                valuationMode: valuationMode,
+                valuationMode: effectiveValuationMode,
                 code: cleanedCode,
-                shares: valuationMode.usesSharesAndPrice ? parsedShares : 0,
-                latestPrice: valuationMode.usesSharesAndPrice ? parsedPrice : 1.0,
-                manualAmount: valuationMode.usesSharesAndPrice ? 0 : parsedManualAmount,
+                shares: entryKind == .quoteTracked ? parsedShares : 0,
+                latestPrice: entryKind == .quoteTracked ? parsedPrice : 1.0,
+                manualAmount: entryKind == .manualAmount ? parsedManualAmount : 0,
                 totalCost: computedTotalCost,
-                priceDateText: valuationMode.usesSharesAndPrice ? priceDateText : "",
+                priceDateText: entryKind == .quoteTracked ? priceDateText : "",
                 lastUpdated: .now,
                 note: note.trimmingCharacters(in: .whitespacesAndNewlines),
                 sortOrder: nextOrder,
-                fallbackPool: chosenCategory?.pool ?? .investable,
+                fallbackPool: chosenCategory?.pool ?? preselectedPool,
                 category: chosenCategory,
                 account: chosenAccount
             )
@@ -415,6 +592,12 @@ struct HoldingFormSheet: View {
         }
 
         try? modelContext.save()
+        Haptics.success()
+        refreshStore.showToast(
+            style: .success,
+            message: isEditing ? "已保存「\(trimmedName)」" : "已新增「\(trimmedName)」",
+            autoDismissSeconds: 2.0
+        )
         dismiss()
     }
 }

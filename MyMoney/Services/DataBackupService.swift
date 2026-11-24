@@ -30,15 +30,15 @@ enum DataBackupService {
             AssetCategory(name: "海外指数", pool: .investable, colorToken: .indigo, iconName: "globe.americas.fill", targetRatio: nil, sortOrder: 1),
             AssetCategory(name: "债券固收", pool: .investable, colorToken: .teal, iconName: "shield.lefthalf.filled", targetRatio: nil, sortOrder: 2),
             AssetCategory(name: "流动现金", pool: .investable, colorToken: .green, iconName: "banknote.fill", targetRatio: nil, sortOrder: 3),
-            // 固定与底仓资产池（独立于投资占比之外）
-            AssetCategory(name: "大额底仓/定期", pool: .fixed, colorToken: .amber, iconName: "lock.doc.fill", targetRatio: nil, sortOrder: 4),
-            AssetCategory(name: "房产/硬资产", pool: .fixed, colorToken: .slate, iconName: "house.fill", targetRatio: nil, sortOrder: 5)
+            // 固定资产池（独立于投资占比之外）
+            AssetCategory(name: "大额定期", pool: .fixed, colorToken: .amber, iconName: "lock.doc.fill", targetRatio: nil, sortOrder: 4),
+            AssetCategory(name: "房产/不动产", pool: .fixed, colorToken: .slate, iconName: "house.fill", targetRatio: nil, sortOrder: 5)
         ]
 
         let defaultAccounts: [AssetAccount] = [
             AssetAccount(name: "证券账户", subtitle: "场内股票与 ETF", colorToken: .blue, iconName: "chart.bar.xaxis", sortOrder: 0),
             AssetAccount(name: "基金理财账户", subtitle: "场外公募与活期理财", colorToken: .teal, iconName: "iphone.gen3", sortOrder: 1),
-            AssetAccount(name: "银行储蓄账户", subtitle: "存款与大额底仓", colorToken: .amber, iconName: "building.columns.fill", sortOrder: 2)
+            AssetAccount(name: "银行储蓄账户", subtitle: "存款与大额定期", colorToken: .amber, iconName: "building.columns.fill", sortOrder: 2)
         ]
 
         for category in defaultCategories {
@@ -50,7 +50,7 @@ enum DataBackupService {
         return (defaultCategories, defaultAccounts)
     }
 
-    /// 一键载入演示数据（展示「100 万固定底仓」与「20 万投资组合」如何完美解耦）
+    /// 一键载入演示数据（展示「100 万固定资产」与「20 万投资组合」如何完美解耦）
     @MainActor
     static func loadSampleShowcase(in context: ModelContext) throws {
         var categories = (try? context.fetch(FetchDescriptor<AssetCategory>())) ?? []
@@ -89,11 +89,11 @@ enum DataBackupService {
         let catGlobal = findOrCreateCategory(name: "海外指数", pool: .investable, color: .indigo, icon: "globe.americas.fill", target: 30, order: 1)
         let catBond = findOrCreateCategory(name: "债券固收", pool: .investable, color: .teal, icon: "shield.lefthalf.filled", target: 20, order: 2)
         let catCash = findOrCreateCategory(name: "流动现金", pool: .investable, color: .green, icon: "banknote.fill", target: 10, order: 3)
-        let catReserve = findOrCreateCategory(name: "大额底仓/定期", pool: .fixed, color: .amber, icon: "lock.doc.fill", target: nil, order: 4)
+        let catReserve = findOrCreateCategory(name: "大额定期", pool: .fixed, color: .amber, icon: "lock.doc.fill", target: nil, order: 4)
 
         let accBroker = findOrCreateAccount(name: "证券账户", subtitle: "场内股票与 ETF", color: .blue, icon: "chart.bar.xaxis", order: 0)
         let accFund = findOrCreateAccount(name: "基金理财账户", subtitle: "场外公募与活期理财", color: .teal, icon: "iphone.gen3", order: 1)
-        let accBank = findOrCreateAccount(name: "银行储蓄账户", subtitle: "存款与大额底仓", color: .amber, icon: "building.columns.fill", order: 2)
+        let accBank = findOrCreateAccount(name: "银行储蓄账户", subtitle: "存款与大额定期", color: .amber, icon: "building.columns.fill", order: 2)
 
         let sampleHoldings: [AssetHolding] = [
             AssetHolding(
@@ -157,11 +157,11 @@ enum DataBackupService {
                 account: accFund
             ),
             AssetHolding(
-                name: "三年期大额存单底仓",
+                name: "三年期大额存单",
                 valuationMode: .manualAmount,
                 manualAmount: 1000000,
                 totalCost: 1000000,
-                note: "归属固定/底仓，不稀释投资组合占比",
+                note: "归属固定资产，不稀释投资组合占比",
                 sortOrder: 5,
                 category: catReserve,
                 account: accBank
@@ -241,13 +241,23 @@ enum DataBackupService {
         )
     }
 
+    /// 预解析 JSON 备份，在弹出覆盖确认前提前校验格式并向用户展示备份内容摘要
+    static func parseBackup(from data: Data) throws -> BackupPayload {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(BackupPayload.self, from: data)
+    }
+
     /// 从 JSON 数据全量恢复（先清空旧记录再按原 UUID 重建关联关系）
     @MainActor
     static func restoreBackup(from data: Data, into context: ModelContext) throws -> (categories: Int, accounts: Int, holdings: Int) {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let payload = try decoder.decode(BackupPayload.self, from: data)
+        let payload = try parseBackup(from: data)
+        return try restoreBackup(payload: payload, into: context)
+    }
 
+    /// 从已校验的 BackupPayload 全量恢复
+    @MainActor
+    static func restoreBackup(payload: BackupPayload, into context: ModelContext) throws -> (categories: Int, accounts: Int, holdings: Int) {
         // 清空现有数据
         let oldHoldings = try context.fetch(FetchDescriptor<AssetHolding>())
         for item in oldHoldings { context.delete(item) }

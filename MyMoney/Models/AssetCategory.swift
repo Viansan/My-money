@@ -3,7 +3,7 @@ import SwiftUI
 import SwiftData
 
 /// 资产类别模型（用户可完全自由增删改排序）
-/// 通过 `pool` 区分「投资资产」与「固定/底仓资产」，并支持为投资类别选填目标占比
+/// 通过 `pool` 区分「投资资产」与「固定资产」，并支持为投资类别选填目标占比
 @Model
 final class AssetCategory {
     var id: UUID

@@ -42,6 +42,8 @@ struct PnLSummary {
 /// 环形图与分类卡片展示切片
 struct AllocationSlice: Identifiable {
     let id: UUID
+    /// 真实分类 UUID（未分类兜底切片为 nil，用于点击下钻筛选）
+    let categoryID: UUID?
     let name: String
     let iconName: String
     let color: Color
@@ -66,6 +68,8 @@ struct AllocationSlice: Identifiable {
 /// 账户分布切片（用于多平台资金盘点与对账）
 struct AccountSlice: Identifiable {
     let id: UUID
+    /// 真实账户 UUID（未指定账户兜底切片为 nil）
+    let accountID: UUID?
     let name: String
     let subtitle: String
     let iconName: String
@@ -77,11 +81,15 @@ struct AccountSlice: Identifiable {
     let holdingCount: Int
 }
 
-/// 全局资产组合聚合快照（纯计算层，将「投资资产」与「固定/底仓资产」完全隔离计算）
+/// 全局资产组合聚合快照（纯计算层，将「投资资产」与「固定资产」完全隔离计算）
 struct PortfolioSnapshot {
     let totalNetWorth: Double
     let investableTotal: Double
     let fixedTotal: Double
+
+    let hasInvestableHoldings: Bool
+    let hasFixedHoldings: Bool
+    let hasRefreshableHoldings: Bool
 
     let overallPnL: PnLSummary
     let investablePnL: PnLSummary
@@ -91,9 +99,13 @@ struct PortfolioSnapshot {
     let fixedSlices: [AllocationSlice]
     let accountSlices: [AccountSlice]
 
-    /// 若至少有一个投资类别填写了目标占比，返回已设目标占比之和（方便参考是否合计 100%）
+    /// 若至少有一个投资类别填写了目标占比，返回已设目标占比之和
     let configuredTargetSum: Double?
     let latestQuoteUpdatedAt: Date?
+
+    var hasBothPools: Bool {
+        hasInvestableHoldings && hasFixedHoldings
+    }
 
     var investableShareOfNetWorth: Double {
         guard totalNetWorth > 0 else { return 0 }
@@ -117,20 +129,24 @@ struct PortfolioSnapshot {
         let fixedSum = fixedHoldings.reduce(0.0) { $0 + $1.marketValue }
         let netWorth = investableSum + fixedSum
 
-        // 1. 构建投资资产分类切片（分母严格为 investableSum，完全不受固定资产金额影响）
         let sortedCategories = categories.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.createdAt < $1.createdAt
         }
 
+        // 1. 投资资产切片：过滤掉既无持仓又未设目标的空分类，保持总览清爽无噪点
         let investableCategories = sortedCategories.filter { $0.pool == .investable }
-        var investSlices: [AllocationSlice] = investableCategories.map { cat in
+        var investSlices: [AllocationSlice] = investableCategories.compactMap { cat in
             let catHoldings = investableHoldings.filter { $0.category?.id == cat.id }
+            if catHoldings.isEmpty && cat.targetRatio == nil {
+                return nil
+            }
             let amount = catHoldings.reduce(0.0) { $0 + $1.marketValue }
             let poolPct = investableSum > 0 ? (amount / investableSum) * 100.0 : 0
             let totalPct = netWorth > 0 ? (amount / netWorth) * 100.0 : 0
             return AllocationSlice(
                 id: cat.id,
+                categoryID: cat.id,
                 name: cat.name,
                 iconName: cat.iconName,
                 color: cat.tintColor,
@@ -144,13 +160,13 @@ struct PortfolioSnapshot {
             )
         }
 
-        // 未分类的投资资产兜底切片
         let uncategorizedInvestable = investableHoldings.filter { $0.category == nil }
         if !uncategorizedInvestable.isEmpty {
             let amount = uncategorizedInvestable.reduce(0.0) { $0 + $1.marketValue }
             investSlices.append(
                 AllocationSlice(
                     id: UUID(uuidString: "00000000-0000-0000-0000-000000000001") ?? UUID(),
+                    categoryID: nil,
                     name: "未分类（投资）",
                     iconName: "questionmark.folder.fill",
                     color: CategoryColorToken.slate.color,
@@ -165,15 +181,17 @@ struct PortfolioSnapshot {
             )
         }
 
-        // 2. 构建固定/底仓资产切片
+        // 2. 固定资产切片：仅展示有实际持仓的类别
         let fixedCategories = sortedCategories.filter { $0.pool == .fixed }
-        var fixSlices: [AllocationSlice] = fixedCategories.map { cat in
+        var fixSlices: [AllocationSlice] = fixedCategories.compactMap { cat in
             let catHoldings = fixedHoldings.filter { $0.category?.id == cat.id }
+            guard !catHoldings.isEmpty else { return nil }
             let amount = catHoldings.reduce(0.0) { $0 + $1.marketValue }
             let poolPct = fixedSum > 0 ? (amount / fixedSum) * 100.0 : 0
             let totalPct = netWorth > 0 ? (amount / netWorth) * 100.0 : 0
             return AllocationSlice(
                 id: cat.id,
+                categoryID: cat.id,
                 name: cat.name,
                 iconName: cat.iconName,
                 color: cat.tintColor,
@@ -193,6 +211,7 @@ struct PortfolioSnapshot {
             fixSlices.append(
                 AllocationSlice(
                     id: UUID(uuidString: "00000000-0000-0000-0000-000000000002") ?? UUID(),
+                    categoryID: nil,
                     name: "未分类（固定）",
                     iconName: "archivebox.fill",
                     color: CategoryColorToken.slate.color,
@@ -207,19 +226,21 @@ struct PortfolioSnapshot {
             )
         }
 
-        // 3. 构建按账户汇总切片（同一账户下合并展示投资+固定总额，与真实银行/券商 App 账面一致）
+        // 3. 按账户汇总切片：仅展示有实际持仓的活跃账户
         let sortedAccounts = accounts.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.createdAt < $1.createdAt
         }
 
-        var accSlices: [AccountSlice] = sortedAccounts.map { acc in
+        var accSlices: [AccountSlice] = sortedAccounts.compactMap { acc in
             let accHoldings = holdings.filter { $0.account?.id == acc.id }
+            guard !accHoldings.isEmpty else { return nil }
             let invAmt = accHoldings.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
             let fixAmt = accHoldings.filter { $0.effectivePool == .fixed }.reduce(0.0) { $0 + $1.marketValue }
             let total = invAmt + fixAmt
             return AccountSlice(
                 id: acc.id,
+                accountID: acc.id,
                 name: acc.name,
                 subtitle: acc.subtitle,
                 iconName: acc.iconName,
@@ -240,6 +261,7 @@ struct PortfolioSnapshot {
             accSlices.append(
                 AccountSlice(
                     id: UUID(uuidString: "00000000-0000-0000-0000-000000000003") ?? UUID(),
+                    accountID: nil,
                     name: "未指定账户",
                     subtitle: "",
                     iconName: "tray.fill",
@@ -253,16 +275,17 @@ struct PortfolioSnapshot {
             )
         }
 
-        // 4. 统计已填写的可选目标比例总和
         let targets = investableCategories.compactMap(\.targetRatio)
         let targetSum: Double? = targets.isEmpty ? nil : targets.reduce(0.0, +)
-
         let latestTime = holdings.map(\.lastUpdated).max()
 
         return PortfolioSnapshot(
             totalNetWorth: netWorth,
             investableTotal: investableSum,
             fixedTotal: fixedSum,
+            hasInvestableHoldings: !investableHoldings.isEmpty,
+            hasFixedHoldings: !fixedHoldings.isEmpty,
+            hasRefreshableHoldings: holdings.contains(where: \.supportsQuoteRefresh),
             overallPnL: PnLSummary.compute(from: holdings),
             investablePnL: PnLSummary.compute(from: investableHoldings),
             fixedPnL: PnLSummary.compute(from: fixedHoldings),

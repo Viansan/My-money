@@ -1,13 +1,17 @@
 import Foundation
 import CoreFoundation
 
-/// 单只标的行情查询结果
-struct QuoteResult: Sendable {
+/// 单只标的行情查询结果（自带识别出的准确计价模式，无需用户区分场内/场外）
+struct QuoteResult: Sendable, Identifiable, Equatable {
+    var id: String { "\(mode.rawValue)-\(code)" }
     let code: String
     let name: String
     let price: Double
     let dateText: String
     let source: String
+    let mode: ValuationMode
+    /// 是否为纯场内 ETF（腾讯第 61 字段为 "ETF"，用于自动消除 ETF 场内现价与参考净值的重复干扰）
+    let isPureETF: Bool
 }
 
 /// 去重查询键（同一代码在同一计价模式下仅请求一次网络）
@@ -27,22 +31,23 @@ enum QuoteError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .emptyCode:
-            return "请输入有效的证券或基金代码"
+            return "请输入证券或基金代码"
         case .unsupportedMode:
-            return "当前计价方式无需联网拉取行情"
+            return "该计价方式无需联网拉取行情"
         case .networkFailure(let detail):
             return "网络请求失败：\(detail)"
         case .invalidResponse(let code):
-            return "未查询到代码「\(code)」的行情，请核对代码与市场类型"
+            return "未找到代码「\(code)」的行情，请核对代码或手动填单价"
         case .zeroOrMissingPrice(let code):
-            return "代码「\(code)」暂无有效价格，可稍后重试或手动输入单价"
+            return "代码「\(code)」暂无有效价格，请稍后重试或手动填单价"
         }
     }
 }
 
 /// 异步行情与净值服务
-/// - 场内证券：腾讯财经实时行情接口（GB18030 解码 + 集合竞价 0 价回退昨收保护）
-/// - 场外基金：腾讯场外净值接口 + 东方财富移动端净值接口 + F10 历史净值三级自动兜底（兼容债基与美股 QDII）
+/// - 系统自动判断场内证券 / 场外基金：用户输入代码即可直出结果，仅在真实重码（如 000001 / LOF）时列出双候选
+/// - 场内证券：腾讯财经实时行情接口（GB18030 解码 + 集合竞价 0 价自动回退昨收保护）
+/// - 场外基金：腾讯场外净值 + 东财移动端净值 + F10 历史净值三级自动兜底（兼容债基与美股 QDII）
 struct PriceService: Sendable {
     private let session: URLSession
 
@@ -56,7 +61,73 @@ struct PriceService: Sendable {
 
     // MARK: - 公开查询入口
 
-    /// 查询单只证券或场外基金的最新价格/官方单位净值
+    /// 智能识别代码：自动判断是场内现价还是场外净值
+    /// - 95% 以上代码直接返回 1 条精准匹配结果；
+    /// - 仅在极少数真实重码（如 000001 平安银行/华夏成长，或 161125 LOF 场内/场外双渠道）时返回 2 条供用户轻点切换。
+    func lookupSmartCandidates(rawCode: String) async throws -> [QuoteResult] {
+        let cleaned = rawCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else {
+            throw QuoteError.emptyCode
+        }
+
+        let lower = cleaned.lowercased()
+
+        // 1. 显式基金前缀 jj
+        if lower.hasPrefix("jj") {
+            let fund = try await fetchOTCFundQuote(rawCode: cleaned)
+            return [fund]
+        }
+
+        // 2. 显式交易所前缀、美股全字母、或 5 位港股代码 -> 100% 场内证券
+        if lower.hasPrefix("sh") || lower.hasPrefix("sz") || lower.hasPrefix("bj")
+            || lower.hasPrefix("hk") || (lower.hasPrefix("us") && cleaned.count > 2)
+            || cleaned.allSatisfy({ $0.isLetter })
+            || (cleaned.count == 5 && cleaned.allSatisfy({ $0.isNumber })) {
+            let sec = try await fetchExchangeSecurityQuote(rawCode: cleaned)
+            return [sec]
+        }
+
+        // 3. 6 位数字代码：并行探测场内现价与场外净值（完美兼容 519xxx 沪市场外基金、51/56/58/159 ETF、LOF 及普通 A 股/公募）
+        async let exchangeTask: Result<QuoteResult, Error> = {
+            do { return .success(try await self.fetchExchangeSecurityQuote(rawCode: cleaned)) }
+            catch { return .failure(error) }
+        }()
+
+        async let otcTask: Result<QuoteResult, Error> = {
+            do { return .success(try await self.fetchOTCFundQuote(rawCode: cleaned)) }
+            catch { return .failure(error) }
+        }()
+
+        let exchangeOutcome = await exchangeTask
+        let otcOutcome = await otcTask
+
+        switch (exchangeOutcome, otcOutcome) {
+        case (.success(let ex), .success(let otc)):
+            // 纯场内 ETF（如 515800、563020、159915）天然只有场内持仓形态，直接返回场内现价，不打扰用户二选一
+            if ex.isPureETF {
+                return [ex]
+            }
+            // 真正存在场内/场外双义的标的（如 000001 或 161125/501018 LOF），返回双候选
+            return [ex, otc]
+
+        case (.success(let ex), .failure):
+            return [ex]
+
+        case (.failure, .success(let otc)):
+            return [otc]
+
+        case (.failure(let err1), .failure(let err2)):
+            if case QuoteError.networkFailure = err1 {
+                throw err1
+            }
+            if case QuoteError.networkFailure = err2 {
+                throw err2
+            }
+            throw QuoteError.invalidResponse(cleaned)
+        }
+    }
+
+    /// 按已知计价模式查询单只标的（用于批量刷新已有持仓）
     func fetchQuote(code: String, mode: ValuationMode) async throws -> QuoteResult {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -132,13 +203,17 @@ struct PriceService: Sendable {
 
         let rawTimestamp = fields.count > 30 ? fields[30] : ""
         let formattedDate = Self.formatTencentTimestamp(rawTimestamp)
+        let kindField = fields.count > 61 ? fields[61].trimmingCharacters(in: .whitespacesAndNewlines).uppercased() : ""
+        let isPureETF = (kindField == "ETF")
 
         return QuoteResult(
             code: rawCode,
             name: name,
             price: effectivePrice,
             dateText: formattedDate,
-            source: "腾讯行情"
+            source: "场内现价",
+            mode: .exchangeSecurity,
+            isPureETF: isPureETF
         )
     }
 
@@ -218,7 +293,7 @@ struct PriceService: Sendable {
 
         let name = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
         let officialNAV = Double(fields[5]) ?? 0
-        let navDate = fields[8].trimmingCharacters(in: .whitespacesAndNewlines)
+        let navDate = Self.formatShortDate(fields[8])
 
         guard !name.isEmpty, officialNAV > 0 else {
             throw QuoteError.zeroOrMissingPrice(code)
@@ -229,7 +304,9 @@ struct PriceService: Sendable {
             name: name,
             price: officialNAV,
             dateText: navDate,
-            source: "官方净值"
+            source: "场外净值",
+            mode: .otcFund,
+            isPureETF: false
         )
     }
 
@@ -258,8 +335,10 @@ struct PriceService: Sendable {
             code: code,
             name: name,
             price: nav,
-            dateText: info.FSRQ ?? "",
-            source: "东财净值"
+            dateText: Self.formatShortDate(info.FSRQ ?? ""),
+            source: "场外净值",
+            mode: .otcFund,
+            isPureETF: false
         )
     }
 
@@ -291,8 +370,10 @@ struct PriceService: Sendable {
             code: code,
             name: "基金 \(code)",
             price: nav,
-            dateText: item.FSRQ,
-            source: "历史净值"
+            dateText: Self.formatShortDate(item.FSRQ),
+            source: "场外净值",
+            mode: .otcFund,
+            isPureETF: false
         )
     }
 
@@ -340,7 +421,7 @@ struct PriceService: Sendable {
         return content.isEmpty ? nil : String(content)
     }
 
-    /// 格式化腾讯行情时间戳（如 "20261124131708" -> "11-24 13:17"）
+    /// 统一规范场内时间戳为简洁的 "MM-dd HH:mm"（兼容 A 股 14 位数字、港股斜杠、美股连字符）
     private static func formatTencentTimestamp(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.count >= 12 && trimmed.allSatisfy({ $0.isNumber }) {
@@ -350,8 +431,20 @@ struct PriceService: Sendable {
             let minute = trimmed.dropFirst(10).prefix(2)
             return "\(month)-\(day) \(hour):\(minute)"
         }
-        if trimmed.count >= 10 {
-            return String(trimmed.prefix(16))
+        let normalized = trimmed.replacingOccurrences(of: "/", with: "-")
+        // 格式如 "2026-11-23 16:00:01" -> "11-23 16:00"
+        if normalized.count >= 16, normalized.dropFirst(4).hasPrefix("-") {
+            return String(normalized.dropFirst(5).prefix(11))
+        }
+        return formatShortDate(normalized)
+    }
+
+    /// 统一规范日期为 "MM-dd"（如 "2026-11-20" -> "11-20"）
+    private static func formatShortDate(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "/", with: "-")
+        if trimmed.count >= 10, trimmed.dropFirst(4).hasPrefix("-") {
+            return String(trimmed.dropFirst(5).prefix(5))
         }
         return trimmed
     }

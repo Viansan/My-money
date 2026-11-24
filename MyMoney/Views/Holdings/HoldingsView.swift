@@ -5,7 +5,7 @@ import SwiftData
 enum PoolFilterOption: String, CaseIterable, Identifiable {
     case all = "全部"
     case investable = "投资资产"
-    case fixed = "固定/底仓"
+    case fixed = "固定资产"
 
     var id: String { rawValue }
 }
@@ -17,11 +17,23 @@ private struct HoldingGroupSection: Identifiable {
     let badgeText: String?
     let subtitleText: String?
     let subtotal: Double
+    let category: AssetCategory?
+    let account: AssetAccount?
     let items: [AssetHolding]
 }
 
+/// 携带预选上下文的新增表单触发器
+private struct CreateHoldingRequest: Identifiable {
+    let id = UUID()
+    let category: AssetCategory?
+    let account: AssetAccount?
+    let pool: AssetPool
+}
+
 /// Tab 2：资产明细与对账工作台
-/// 支持「按类别 / 按账户对账」一键切换、资金池筛选、搜索、轻点改数、左滑删除与下拉刷新全部行情
+/// - 0 持仓时隐藏全部筛选与刷新噪点，直给新增入口
+/// - 支持「按类别 / 按账户对账」切换、总览下钻筛选与一键收回、分组内快速「+」新增
+/// - 右滑单条刷新行情，左滑编辑或删除（删除支持 5 秒撤销）
 struct HoldingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PortfolioRefreshStore.self) private var refreshStore
@@ -30,14 +42,29 @@ struct HoldingsView: View {
     @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
     @Query(sort: \AssetAccount.sortOrder) private var accounts: [AssetAccount]
 
-    @State private var groupMode: HoldingsGroupMode = .byCategory
-    @State private var poolFilter: PoolFilterOption = .all
     @State private var searchText: String = ""
 
     @State private var quickAdjustTarget: AssetHolding?
+    @State private var queuedFullEditTarget: AssetHolding?
     @State private var fullEditTarget: AssetHolding?
-    @State private var showingCreateSheet = false
+    @State private var createRequest: CreateHoldingRequest?
     @State private var pendingDeleteHolding: AssetHolding?
+
+    private var hasInvestable: Bool {
+        holdings.contains { $0.effectivePool == .investable }
+    }
+
+    private var hasFixed: Bool {
+        holdings.contains { $0.effectivePool == .fixed }
+    }
+
+    private var hasBothPools: Bool {
+        hasInvestable && hasFixed
+    }
+
+    private var hasRefreshableHoldings: Bool {
+        holdings.contains { $0.supportsQuoteRefresh }
+    }
 
     private var investableTotal: Double {
         holdings.filter { $0.effectivePool == .investable }.reduce(0.0) { $0 + $1.marketValue }
@@ -45,17 +72,27 @@ struct HoldingsView: View {
 
     private var filteredHoldings: [AssetHolding] {
         holdings.filter { item in
-            let matchesPool: Bool
-            switch poolFilter {
-            case .all:
-                matchesPool = true
-            case .investable:
-                matchesPool = item.effectivePool == .investable
-            case .fixed:
-                matchesPool = item.effectivePool == .fixed
+            // 1. 下钻精准筛选优先
+            if let drilldown = refreshStore.activeDrilldown {
+                switch drilldown.kind {
+                case .category(let catID):
+                    if item.category?.id != catID { return false }
+                case .account(let accID):
+                    if item.account?.id != accID { return false }
+                }
             }
-            guard matchesPool else { return false }
 
+            // 2. 资金池筛选
+            switch refreshStore.holdingsPoolFilter {
+            case .all:
+                break
+            case .investable:
+                if item.effectivePool != .investable { return false }
+            case .fixed:
+                if item.effectivePool != .fixed { return false }
+            }
+
+            // 3. 关键词搜索
             let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !keyword.isEmpty else { return true }
             return item.name.localizedCaseInsensitiveContains(keyword)
@@ -67,7 +104,7 @@ struct HoldingsView: View {
     }
 
     private var groupedSections: [HoldingGroupSection] {
-        switch groupMode {
+        switch refreshStore.holdingsGroupMode {
         case .byCategory:
             return buildCategorySections()
         case .byAccount:
@@ -76,127 +113,203 @@ struct HoldingsView: View {
     }
 
     var body: some View {
+        @Bindable var bindableStore = refreshStore
+
         NavigationStack {
-            List {
-                // 顶部双维度切换与资金池筛选栏
-                Section {
-                    VStack(spacing: 10) {
-                        Picker("分组维度", selection: $groupMode) {
-                            ForEach(HoldingsGroupMode.allCases) { mode in
-                                Text(mode.rawValue).tag(mode)
-                            }
+            Group {
+                if holdings.isEmpty {
+                    ContentUnavailableView {
+                        Label("还没有记录任何资产", systemImage: "tray")
+                    } description: {
+                        Text("支持股票、ETF、场外基金自动拉价，以及现金、定期存单、房产等按金额记录。")
+                    } actions: {
+                        Button {
+                            Haptics.lightImpact()
+                            createRequest = CreateHoldingRequest(category: nil, account: nil, pool: .investable)
+                        } label: {
+                            Label("新增第一笔资产", systemImage: "plus.circle.fill")
                         }
-                        .pickerStyle(.segmented)
-
-                        HStack(spacing: 8) {
-                            ForEach(PoolFilterOption.allCases) { opt in
-                                filterChip(opt)
-                            }
-                            Spacer()
-                            Text("小计 \(Formatters.currency(filteredHoldings.reduce(0) { $0 + $1.marketValue }, hidden: refreshStore.hideAmounts, compact: true))")
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
+                        .buttonStyle(.borderedProminent)
                     }
-                    .padding(.vertical, 4)
-                }
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-
-                if groupedSections.isEmpty {
-                    Section {
-                        ContentUnavailableView {
-                            Label(holdings.isEmpty ? "暂无资产持仓" : "无匹配资产", systemImage: "tray")
-                        } description: {
-                            Text(holdings.isEmpty ? "点击右上角「+」录入股票、基金、现金或固定底仓。" : "尝试切换上方筛选条件或修改搜索关键词。")
-                        } actions: {
-                            if holdings.isEmpty {
-                                Button("新增资产") {
-                                    showingCreateSheet = true
-                                }
-                                .buttonStyle(.borderedProminent)
-                            }
-                        }
-                        .padding(.vertical, 20)
-                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color(.systemGroupedBackground))
                 } else {
-                    ForEach(groupedSections) { section in
+                    List {
+                        // 顶部控制栏：仅在有资产时展示，且按需展示下钻提示条 / 双池胶囊
                         Section {
-                            ForEach(section.items) { item in
-                                Button {
-                                    quickAdjustTarget = item
-                                } label: {
-                                    HoldingRowView(
-                                        holding: item,
-                                        groupMode: groupMode,
-                                        hideAmounts: refreshStore.hideAmounts,
-                                        pnlColorScheme: refreshStore.pnlColorScheme
-                                    )
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button(role: .destructive) {
-                                        pendingDeleteHolding = item
-                                    } label: {
-                                        Label("删除", systemImage: "trash")
+                            VStack(spacing: 10) {
+                                if let drilldown = refreshStore.activeDrilldown {
+                                    drilldownBanner(drilldown)
+                                } else {
+                                    Picker("分组维度", selection: $bindableStore.holdingsGroupMode) {
+                                        ForEach(HoldingsGroupMode.allCases) { mode in
+                                            Text(mode.rawValue).tag(mode)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .onChange(of: refreshStore.holdingsGroupMode) { _, _ in
+                                        Haptics.selection()
                                     }
 
-                                    Button {
-                                        fullEditTarget = item
-                                    } label: {
-                                        Label("编辑", systemImage: "pencil")
+                                    if hasBothPools {
+                                        HStack(spacing: 8) {
+                                            ForEach(PoolFilterOption.allCases) { opt in
+                                                filterChip(opt)
+                                            }
+                                            Spacer()
+                                            Text(Formatters.currency(filteredHoldings.reduce(0) { $0 + $1.marketValue }, hidden: refreshStore.hideAmounts, compact: true))
+                                                .font(.caption.weight(.medium))
+                                                .monospacedDigit()
+                                                .foregroundStyle(.secondary)
+                                        }
                                     }
-                                    .tint(.indigo)
                                 }
                             }
-                        } header: {
-                            sectionHeader(section)
+                            .padding(.vertical, 2)
+                        }
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+
+                        if groupedSections.isEmpty {
+                            Section {
+                                ContentUnavailableView {
+                                    Label("无匹配资产", systemImage: "magnifyingglass")
+                                } description: {
+                                    Text("换个关键词，或清除当前筛选条件。")
+                                } actions: {
+                                    if refreshStore.activeDrilldown != nil || refreshStore.holdingsPoolFilter != .all || !searchText.isEmpty {
+                                        Button("显示全部资产") {
+                                            Haptics.selection()
+                                            searchText = ""
+                                            refreshStore.clearDrilldown()
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                .padding(.vertical, 16)
+                            }
+                        } else {
+                            ForEach(groupedSections) { section in
+                                Section {
+                                    ForEach(section.items) { item in
+                                        Button {
+                                            Haptics.lightImpact()
+                                            quickAdjustTarget = item
+                                        } label: {
+                                            HoldingRowView(
+                                                holding: item,
+                                                groupMode: refreshStore.holdingsGroupMode,
+                                                hideAmounts: refreshStore.hideAmounts,
+                                                pnlColorScheme: refreshStore.pnlColorScheme
+                                            )
+                                        }
+                                        .buttonStyle(.plain)
+                                        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                            if item.supportsQuoteRefresh {
+                                                Button {
+                                                    Task {
+                                                        await refreshStore.refreshSingleHolding(item, in: modelContext)
+                                                    }
+                                                } label: {
+                                                    Label("刷新现价", systemImage: "arrow.clockwise")
+                                                }
+                                                .tint(.blue)
+                                            }
+                                        }
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                            Button(role: .destructive) {
+                                                Haptics.lightImpact()
+                                                pendingDeleteHolding = item
+                                            } label: {
+                                                Label("删除", systemImage: "trash")
+                                            }
+
+                                            Button {
+                                                Haptics.lightImpact()
+                                                fullEditTarget = item
+                                            } label: {
+                                                Label("编辑", systemImage: "pencil")
+                                            }
+                                            .tint(.indigo)
+                                        }
+                                    }
+                                } header: {
+                                    sectionHeader(section)
+                                }
+                            }
+                        }
+                    }
+                    .listStyle(.insetGrouped)
+                    .searchable(text: $searchText, prompt: "搜索名称、代码、分类或账户")
+                    .refreshable {
+                        if hasRefreshableHoldings {
+                            await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext, silent: false)
                         }
                     }
                 }
             }
-            .listStyle(.insetGrouped)
             .navigationTitle("资产")
-            .searchable(text: $searchText, prompt: "搜索名称、代码、分类或账户")
-            .refreshable {
-                await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext)
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 14) {
-                        Button {
-                            Task {
-                                await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext)
+                        if !holdings.isEmpty {
+                            Button {
+                                Haptics.selection()
+                                refreshStore.hideAmounts.toggle()
+                            } label: {
+                                Image(systemName: refreshStore.hideAmounts ? "eye.slash" : "eye")
                             }
-                        } label: {
-                            if refreshStore.isRefreshing {
-                                ProgressView()
-                            } else {
-                                Image(systemName: "arrow.clockwise")
-                            }
+                            .accessibilityLabel(refreshStore.hideAmounts ? "显示金额" : "隐藏金额")
                         }
-                        .disabled(refreshStore.isRefreshing)
+
+                        if hasRefreshableHoldings {
+                            Button {
+                                Task {
+                                    await refreshStore.refreshAllQuotes(holdings: holdings, in: modelContext, silent: false)
+                                }
+                            } label: {
+                                if refreshStore.isRefreshing {
+                                    ProgressView()
+                                } else {
+                                    Image(systemName: "arrow.clockwise")
+                                }
+                            }
+                            .disabled(refreshStore.isRefreshing)
+                            .accessibilityLabel("刷新行情")
+                        }
 
                         Button {
-                            showingCreateSheet = true
+                            Haptics.lightImpact()
+                            let defaultPool: AssetPool = (refreshStore.holdingsPoolFilter == .fixed) ? .fixed : .investable
+                            createRequest = CreateHoldingRequest(category: nil, account: nil, pool: defaultPool)
                         } label: {
                             Image(systemName: "plus")
                                 .fontWeight(.semibold)
                         }
+                        .accessibilityLabel("新增资产")
                     }
                 }
             }
-            .sheet(item: $quickAdjustTarget) { target in
+            .sheet(item: $quickAdjustTarget, onDismiss: {
+                if let nextEdit = queuedFullEditTarget {
+                    queuedFullEditTarget = nil
+                    fullEditTarget = nextEdit
+                }
+            }) { target in
                 QuickAdjustHoldingSheet(holding: target) {
-                    fullEditTarget = target
+                    queuedFullEditTarget = target
                 }
             }
             .sheet(item: $fullEditTarget) { target in
                 HoldingFormSheet(existingHolding: target)
             }
-            .sheet(isPresented: $showingCreateSheet) {
-                HoldingFormSheet(existingHolding: nil)
+            .sheet(item: $createRequest) { req in
+                HoldingFormSheet(
+                    existingHolding: nil,
+                    preselectedCategory: req.category,
+                    preselectedAccount: req.account,
+                    preselectedPool: req.pool
+                )
             }
             .confirmationDialog(
                 "确认删除「\(pendingDeleteHolding?.name ?? "")」？",
@@ -206,10 +319,9 @@ struct HoldingsView: View {
                 ),
                 titleVisibility: .visible
             ) {
-                Button("删除", role: .destructive) {
+                Button("删除（5 秒内可撤销）", role: .destructive) {
                     if let target = pendingDeleteHolding {
-                        modelContext.delete(target)
-                        try? modelContext.save()
+                        refreshStore.deleteHoldingWithUndo(target, in: modelContext)
                     }
                     pendingDeleteHolding = nil
                 }
@@ -217,13 +329,49 @@ struct HoldingsView: View {
                     pendingDeleteHolding = nil
                 }
             }
+            .onChange(of: hasBothPools) { _, both in
+                if !both && refreshStore.activeDrilldown == nil {
+                    refreshStore.holdingsPoolFilter = .all
+                }
+            }
         }
     }
 
+    private func drilldownBanner(_ drilldown: HoldingsDrilldownFilter) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Text("筛选：\(drilldown.label)")
+                .font(.subheadline.weight(.medium))
+            Spacer()
+            Button {
+                withAnimation(.snappy) {
+                    refreshStore.clearDrilldown()
+                }
+            } label: {
+                Label("显示全部", systemImage: "xmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private func filterChip(_ option: PoolFilterOption) -> some View {
-        let selected = poolFilter == option
+        let selected = refreshStore.holdingsPoolFilter == option
         return Button {
-            withAnimation(.snappy) { poolFilter = option }
+            Haptics.selection()
+            withAnimation(.snappy) {
+                // 再按已选胶囊即可收回恢复「全部」
+                if selected && option != .all {
+                    refreshStore.holdingsPoolFilter = .all
+                } else {
+                    refreshStore.holdingsPoolFilter = option
+                }
+            }
         } label: {
             Text(option.rawValue)
                 .font(.caption.weight(selected ? .semibold : .regular))
@@ -239,7 +387,7 @@ struct HoldingsView: View {
     }
 
     private func sectionHeader(_ section: HoldingGroupSection) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             Text(section.title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
@@ -267,6 +415,23 @@ struct HoldingsView: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .textCase(nil)
+
+            if section.category != nil || section.account != nil {
+                Button {
+                    Haptics.lightImpact()
+                    createRequest = CreateHoldingRequest(
+                        category: section.category,
+                        account: section.account,
+                        pool: section.category?.pool ?? .investable
+                    )
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(Color.accentColor.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("在\(section.title)下新增资产")
+            }
         }
     }
 
@@ -293,9 +458,11 @@ struct HoldingsView: View {
                 HoldingGroupSection(
                     id: "cat-\(cat.id.uuidString)",
                     title: cat.name,
-                    badgeText: cat.pool == .fixed ? "固定/底仓" : nil,
+                    badgeText: cat.pool == .fixed ? "固定资产" : nil,
                     subtitleText: ratioNote,
                     subtotal: sum,
+                    category: cat,
+                    account: nil,
                     items: items
                 )
             )
@@ -310,6 +477,8 @@ struct HoldingsView: View {
                     badgeText: nil,
                     subtitleText: nil,
                     subtotal: uncategorized.reduce(0.0) { $0 + $1.marketValue },
+                    category: nil,
+                    account: nil,
                     items: uncategorized
                 )
             )
@@ -330,6 +499,8 @@ struct HoldingsView: View {
                     badgeText: acc.subtitle.isEmpty ? nil : acc.subtitle,
                     subtitleText: nil,
                     subtotal: sum,
+                    category: nil,
+                    account: acc,
                     items: items
                 )
             )
@@ -344,6 +515,8 @@ struct HoldingsView: View {
                     badgeText: nil,
                     subtitleText: nil,
                     subtotal: unassigned.reduce(0.0) { $0 + $1.marketValue },
+                    category: nil,
+                    account: nil,
                     items: unassigned
                 )
             )

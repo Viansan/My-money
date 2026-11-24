@@ -143,7 +143,7 @@ struct AccountListView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
+        .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 Haptics.lightImpact()

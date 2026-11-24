@@ -3,7 +3,7 @@ import SwiftUI
 /// 全 App 统一动效语言（克制、可打断、尊重「减少动态效果」）
 /// 同一类状态变化严格复用同一条弹簧曲线，避免各页面各自发明节奏
 enum Motion {
-    /// 高频微交互：按压反馈、胶囊切换、勾选图标、眼睛显隐（最快，绝不拖泥带水）
+    /// 高频微交互：按压反馈、胶囊切换、勾选图标（最快，绝不拖泥带水）
     static func micro(reduceMotion: Bool) -> Animation {
         reduceMotion
             ? .easeInOut(duration: 0.14)
@@ -32,7 +32,7 @@ enum Motion {
     }
 }
 
-/// 苹果原生风格轻按反馈（跟手、可打断、不抢占 ScrollView 手势、兼容「减少动态效果」）
+/// 苹果原生风格轻按反馈（用于 ScrollView 卡片、胶囊与网格选择器，兼容「减少动态效果」）
 struct TactilePressButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var pressedScale: CGFloat = 0.982
@@ -46,47 +46,35 @@ struct TactilePressButtonStyle: ButtonStyle {
     }
 }
 
-/// 共享导航栏隐私显隐按钮（图标平滑替换，全 App 位置与节奏一致）
+/// 共享导航栏隐私显隐按钮（适配 iOS 26 Liquid Glass 原生 UIBarButtonItem，不附加破坏性视图过渡）
 struct PrivacyToggleButton: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var hideAmounts: Bool
 
     var body: some View {
         Button {
             Haptics.selection()
-            withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                hideAmounts.toggle()
-            }
+            hideAmounts.toggle()
         } label: {
             Image(systemName: hideAmounts ? "eye.slash" : "eye")
                 .font(.subheadline)
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 24, height: 24)
         }
         .accessibilityLabel(hideAmounts ? "显示金额" : "隐藏金额")
     }
 }
 
-/// 共享导航栏刷新按钮（固定 24×24 占位，加载态平滑过渡，彻底杜绝右侧「+」按钮左右抖动）
+/// 共享导航栏刷新按钮（适配 iOS 26 Liquid Glass 原生 UIBarButtonItem，避免过渡动画触发 UIKit 崩溃）
 struct RefreshToolbarButton: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let isRefreshing: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            ZStack {
-                if isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.72).combined(with: .opacity))
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.72).combined(with: .opacity))
-                }
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "arrow.clockwise")
             }
-            .frame(width: 24, height: 24)
-            .animation(Motion.micro(reduceMotion: reduceMotion), value: isRefreshing)
         }
         .disabled(isRefreshing)
         .accessibilityLabel(isRefreshing ? "正在刷新行情" : "刷新行情")

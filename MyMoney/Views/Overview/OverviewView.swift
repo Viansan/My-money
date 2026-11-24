@@ -64,7 +64,7 @@ struct OverviewView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 14) {
                         if snapshot.hasRefreshableHoldings {
                             RefreshToolbarButton(isRefreshing: refreshStore.isRefreshing) {
                                 Task {
@@ -79,7 +79,6 @@ struct OverviewView: View {
                         } label: {
                             Image(systemName: "plus")
                                 .fontWeight(.semibold)
-                                .frame(width: 24, height: 24)
                         }
                         .accessibilityLabel("新增资产")
                     }

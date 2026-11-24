@@ -206,7 +206,7 @@ struct HoldingsView: View {
                                                 pnlColorScheme: refreshStore.pnlColorScheme
                                             )
                                         }
-                                        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
+                                        .buttonStyle(.plain)
                                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
                                             if item.supportsQuoteRefresh {
                                                 Button {
@@ -244,9 +244,6 @@ struct HoldingsView: View {
                     }
                     .listStyle(.insetGrouped)
                     .listSectionSpacing(.compact)
-                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.holdingsGroupMode)
-                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.holdingsPoolFilter)
-                    .animation(Motion.standard(reduceMotion: reduceMotion), value: refreshStore.activeDrilldown)
                     .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "搜索名称、代码或账户")
                     .refreshable {
                         if hasRefreshableHoldings {
@@ -261,9 +258,7 @@ struct HoldingsView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     if refreshStore.activeDrilldown != nil {
                         Button {
-                            withAnimation(Motion.standard(reduceMotion: reduceMotion)) {
-                                refreshStore.clearDrilldown()
-                            }
+                            refreshStore.clearDrilldown()
                         } label: {
                             HStack(spacing: 3) {
                                 Image(systemName: "chevron.left")
@@ -271,10 +266,8 @@ struct HoldingsView: View {
                                 Text("全部")
                             }
                         }
-                        .transition(.opacity)
                     } else if !holdings.isEmpty {
                         PrivacyToggleButton(hideAmounts: $bindableStore.hideAmounts)
-                            .transition(.opacity)
                     }
                 }
 
@@ -294,7 +287,7 @@ struct HoldingsView: View {
                 }
 
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 14) {
                         if hasRefreshableHoldings {
                             RefreshToolbarButton(isRefreshing: refreshStore.isRefreshing) {
                                 Task {
@@ -310,7 +303,6 @@ struct HoldingsView: View {
                         } label: {
                             Image(systemName: "plus")
                                 .fontWeight(.semibold)
-                                .frame(width: 24, height: 24)
                         }
                         .accessibilityLabel("新增资产")
                     }
@@ -367,12 +359,10 @@ struct HoldingsView: View {
         let selected = refreshStore.holdingsPoolFilter == option
         return Button {
             Haptics.selection()
-            withAnimation(Motion.micro(reduceMotion: reduceMotion)) {
-                if selected && option != .all {
-                    refreshStore.holdingsPoolFilter = .all
-                } else {
-                    refreshStore.holdingsPoolFilter = option
-                }
+            if selected && option != .all {
+                refreshStore.holdingsPoolFilter = .all
+            } else {
+                refreshStore.holdingsPoolFilter = option
             }
         } label: {
             Text(option.rawValue)
@@ -384,6 +374,7 @@ struct HoldingsView: View {
                     selected ? Color.accentColor : Color(.secondarySystemGroupedBackground),
                     in: Capsule()
                 )
+                .animation(Motion.micro(reduceMotion: reduceMotion), value: selected)
         }
         .buttonStyle(TactilePressButtonStyle(pressedScale: 0.94))
     }

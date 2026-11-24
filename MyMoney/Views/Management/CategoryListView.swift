@@ -189,7 +189,7 @@ struct CategoryListView: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.85))
+        .buttonStyle(.plain)
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 Haptics.lightImpact()
@@ -297,7 +297,7 @@ struct CategoryEditorSheet: View {
                     TextField("类别名称（如：海外指数、定期存单）", text: $name)
                         .focused($focusedField, equals: .name)
 
-                    Picker("资金池归属", selection: $pool.animation(Motion.standard(reduceMotion: reduceMotion))) {
+                    Picker("资金池归属", selection: $pool) {
                         ForEach(AssetPool.allCases) { option in
                             Text(option.title).tag(option)
                         }

@@ -2,8 +2,10 @@ import SwiftUI
 import SwiftData
 
 /// Tab 1：资产总览页
-/// - 紧致成熟的信息架构：小标题导航栏 + 双核心表面（净值总览 + 图表与结构一体化容器），消除大块留白与零散卡片堆叠感
-/// - 设定参考比例后，同步呈现「目标 % + 目标金额（元）」与「偏离金额（超/差 ¥X）+ 偏离百分点」双维度数字
+/// - 紧致双表面布局：顶卡净值 + 主卡（比例构成条与分组明细一体化）
+/// - 行内信息零冗余：
+///   - 第一行右侧仅放「当前实际金额」（黑色主角）
+///   - 第二行左侧放「实际 % / 目标 % · 目标金额」，右侧放「差/超 具体金额」（温和区分超配与待补，不与黑字重叠争抢）
 struct OverviewView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(PortfolioRefreshStore.self) private var refreshStore
@@ -13,6 +15,7 @@ struct OverviewView: View {
     @Query(sort: \AssetAccount.sortOrder) private var accounts: [AssetAccount]
 
     @State private var selectedLens: OverviewLens = .investable
+    @State private var highlightedSliceID: UUID?
     @State private var showingAddHolding = false
 
     private var snapshot: PortfolioSnapshot {
@@ -52,7 +55,7 @@ struct OverviewView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 6)
-                .padding(.bottom, 28)
+                .padding(.bottom, 32)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("我的资产")
@@ -204,7 +207,10 @@ struct OverviewView: View {
                         isSelected: selectedLens == .investable
                     ) {
                         Haptics.selection()
-                        withAnimation(.snappy) { selectedLens = .investable }
+                        withAnimation(.snappy) {
+                            selectedLens = .investable
+                            highlightedSliceID = nil
+                        }
                     }
 
                     Divider()
@@ -220,7 +226,10 @@ struct OverviewView: View {
                         isSelected: selectedLens == .fixed
                     ) {
                         Haptics.selection()
-                        withAnimation(.snappy) { selectedLens = .fixed }
+                        withAnimation(.snappy) {
+                            selectedLens = .fixed
+                            highlightedSliceID = nil
+                        }
                     }
                 }
             }
@@ -296,12 +305,13 @@ struct OverviewView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - 表面 2：图表 + 分组明细一体化容器（消除多卡堆叠留白）
+    // MARK: - 表面 2：比例构成条 + 明细一体化容器
 
     private var unifiedAllocationSurface: some View {
         VStack(spacing: 0) {
             AllocationChartSection(
                 selectedLens: $selectedLens,
+                highlightedSliceID: $highlightedSliceID,
                 availableLenses: availableLenses,
                 snapshot: snapshot,
                 hideAmounts: refreshStore.hideAmounts
@@ -309,7 +319,6 @@ struct OverviewView: View {
 
             Divider()
 
-            // 内嵌列表表头
             HStack {
                 Text(breakdownTitle)
                     .font(.caption.weight(.semibold))
@@ -325,12 +334,11 @@ struct OverviewView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 8)
+            .padding(.vertical, 7)
             .background(Color(.tertiarySystemGroupedBackground).opacity(0.45))
 
             Divider()
 
-            // 无缝分组明细行
             breakdownRows
         }
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -341,7 +349,7 @@ struct OverviewView: View {
         switch selectedLens {
         case .investable: return "投资结构"
         case .fixed: return "固定资产明细"
-        case .accounts: return "账户资金分布"
+        case .accounts: return "账户分布"
         }
     }
 
@@ -349,7 +357,7 @@ struct OverviewView: View {
         switch selectedLens {
         case .investable:
             if let targetSum = snapshot.configuredTargetSum {
-                return ("参考目标合计 \(Formatters.percentPoints(targetSum, digits: 0))", abs(targetSum - 100) >= 0.1)
+                return ("目标合计 \(Formatters.percentPoints(targetSum, digits: 0))", abs(targetSum - 100) >= 0.1)
             }
             return ("共 \(snapshot.investableSlices.count) 类", false)
         case .fixed:
@@ -394,9 +402,13 @@ struct OverviewView: View {
         }
     }
 
-    /// 单行分类明细：设了参考比例时同时展示「目标 % + 目标金额」与「超/差 ¥金额 + 偏离 %」
+    /// 单行分类明细（零重叠分层）：
+    /// - 第一行：类名 + 实际金额（唯一主角黑字）
+    /// - 第二行：左「实际% / 目标% · 目标¥金额」，右「超/差 ¥金额」（超配暖橙轻提醒，待补中性灰，杜绝满屏黄字）
     private func allocationSliceRow(slice: AllocationSlice, showTargetIfPresent: Bool) -> some View {
-        Button {
+        let isHighlighted = (highlightedSliceID == slice.id)
+
+        return Button {
             refreshStore.drillDownToCategory(id: slice.categoryID, name: slice.name, pool: slice.pool)
         } label: {
             HStack(alignment: .center, spacing: 10) {
@@ -409,9 +421,9 @@ struct OverviewView: View {
                         .foregroundStyle(slice.color)
                 }
 
-                VStack(alignment: .leading, spacing: 5) {
-                    // 第一行：类别名 + 实际金额 & 实际占比
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
+                    // 第一行：名称 + 唯一主角金额
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(slice.name)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
@@ -428,27 +440,26 @@ struct OverviewView: View {
                             .monospacedDigit()
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-
-                        Text(Formatters.percentPoints(slice.poolRatioPercent))
-                            .font(.caption.weight(.medium))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
                     }
 
-                    // 第二行：设定参考后，完整给出百分比 + 具体金额双维度信息
+                    // 第二行：占比与目标对比（信息各司其职，无重复百分比）
                     if showTargetIfPresent, let targetPct = slice.targetRatioPercent, let devPts = slice.deviationPoints {
                         HStack(spacing: 6) {
-                            if let targetAmt = slice.targetAmount, !refreshStore.hideAmounts {
-                                Text("目标 \(Formatters.percentPoints(targetPct, digits: 0)) (\(Formatters.wholeCurrency(targetAmt)))")
+                            HStack(spacing: 3) {
+                                Text(Formatters.percentPoints(slice.poolRatioPercent))
+                                    .fontWeight(.medium)
                                     .foregroundStyle(.secondary)
-                            } else {
-                                Text("目标 \(Formatters.percentPoints(targetPct, digits: 0))")
-                                    .foregroundStyle(.secondary)
+                                Text("/ \(Formatters.percentPoints(targetPct, digits: 0))")
+                                    .foregroundStyle(.tertiary)
+                                if let targetAmt = slice.targetAmount, !refreshStore.hideAmounts {
+                                    Text("· 目标 \(Formatters.wholeCurrency(targetAmt))")
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
 
                             Spacer(minLength: 4)
 
-                            targetDeviationBadge(devPoints: devPts, devAmount: slice.deviationAmount)
+                            targetGapLabel(devPoints: devPts, devAmount: slice.deviationAmount)
                         }
                         .font(.caption2)
                         .monospacedDigit()
@@ -457,32 +468,32 @@ struct OverviewView: View {
                     } else if slice.pool == .fixed {
                         HStack {
                             Text("占总净值 \(Formatters.percentPoints(slice.netWorthRatioPercent))")
-                                .font(.caption2)
-                                .monospacedDigit()
                                 .foregroundStyle(.secondary)
                             Spacer()
                             if slice.pnl.hasTrackedHoldings {
                                 let delta = slice.pnl.profitLoss
                                 Text("盈亏 \(Formatters.signedCurrency(delta, hidden: refreshStore.hideAmounts))")
-                                    .font(.caption2)
-                                    .monospacedDigit()
                                     .foregroundStyle(refreshStore.pnlColorScheme.color(for: delta))
-                            }
-                        }
-                    } else if slice.pnl.hasTrackedHoldings {
-                        let delta = slice.pnl.profitLoss
-                        HStack(spacing: 4) {
-                            Text("盈亏 \(Formatters.signedCurrency(delta, hidden: refreshStore.hideAmounts))")
-                            if let rate = slice.pnl.profitLossRate {
-                                Text("(\(Formatters.signedRate(rate, hidden: refreshStore.hideAmounts)))")
                             }
                         }
                         .font(.caption2)
                         .monospacedDigit()
-                        .foregroundStyle(refreshStore.pnlColorScheme.color(for: delta))
+                    } else {
+                        HStack {
+                            Text("占比 \(Formatters.percentPoints(slice.poolRatioPercent))")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if slice.pnl.hasTrackedHoldings {
+                                let delta = slice.pnl.profitLoss
+                                Text("盈亏 \(Formatters.signedCurrency(delta, hidden: refreshStore.hideAmounts))")
+                                    .foregroundStyle(refreshStore.pnlColorScheme.color(for: delta))
+                            }
+                        }
+                        .font(.caption2)
+                        .monospacedDigit()
                     }
 
-                    // 第三行：紧致进度条 + 目标刻度
+                    // 第三行：紧致进度条 + 目标刻度线
                     GeometryReader { geo in
                         let width = max(geo.size.width, 1)
                         let actualFraction = min(max(slice.poolRatioPercent / 100.0, 0), 1)
@@ -500,7 +511,7 @@ struct OverviewView: View {
                             if showTargetIfPresent, let target = slice.targetRatioPercent, target > 0, target <= 100 {
                                 let markerX = min(max(width * (target / 100.0), 1), width - 2)
                                 RoundedRectangle(cornerRadius: 1)
-                                    .fill(Color.primary.opacity(0.65))
+                                    .fill(Color.primary.opacity(0.6))
                                     .frame(width: 2, height: 8)
                                     .offset(x: markerX - 1)
                             }
@@ -514,37 +525,44 @@ struct OverviewView: View {
                     .foregroundStyle(.quaternary)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.vertical, 9)
+            .background(isHighlighted ? slice.color.opacity(0.08) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    /// 参考目标偏差：同时展示具体差额（超 ¥4,600 / 差 ¥2,500）与百分偏差（+2.3% / -1.8%）
+    /// 差额辅助标：超配用轻暖橙胶囊提示，待补用克制中性灰展示，避免满屏亮黄抢主角
     @ViewBuilder
-    private func targetDeviationBadge(devPoints: Double, devAmount: Double?) -> some View {
-        let isSignificant = abs(devPoints) >= 5.0
-        let tint: Color = isSignificant ? .orange : .secondary
-
+    private func targetGapLabel(devPoints: Double, devAmount: Double?) -> some View {
         if abs(devPoints) < 0.2 {
             Text("已达标")
                 .fontWeight(.medium)
                 .foregroundStyle(.green)
         } else if let devAmount, !refreshStore.hideAmounts {
-            let verb = devAmount >= 0 ? "超" : "差"
-            Text("\(verb) \(Formatters.wholeCurrency(abs(devAmount))) (\(Formatters.signedPercentPoints(devPoints)))")
-                .fontWeight(isSignificant ? .semibold : .medium)
-                .foregroundStyle(tint)
+            if devAmount > 0 {
+                Text("超 \(Formatters.wholeCurrency(devAmount))")
+                    .fontWeight(.medium)
+                    .foregroundStyle(Color.orange)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(Color.orange.opacity(0.11), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            } else {
+                Text("差 \(Formatters.wholeCurrency(abs(devAmount)))")
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+            }
         } else {
-            let verb = devPoints >= 0 ? "偏高" : "偏低"
-            Text("\(verb) \(Formatters.signedPercentPoints(devPoints))")
-                .fontWeight(isSignificant ? .semibold : .medium)
-                .foregroundStyle(tint)
+            Text(devPoints > 0 ? "高 \(Formatters.percentPoints(devPoints))" : "低 \(Formatters.percentPoints(abs(devPoints)))")
+                .fontWeight(.medium)
+                .foregroundStyle(devPoints > 0 ? Color.orange : Color.secondary)
         }
     }
 
     private func accountSliceRow(_ acc: AccountSlice) -> some View {
-        Button {
+        let isHighlighted = (highlightedSliceID == acc.id)
+
+        return Button {
             refreshStore.drillDownToAccount(id: acc.accountID, name: acc.name)
         } label: {
             HStack(alignment: .center, spacing: 10) {
@@ -558,7 +576,7 @@ struct OverviewView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
                         Text(acc.name)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
@@ -574,23 +592,22 @@ struct OverviewView: View {
                             .font(.system(.subheadline, design: .rounded, weight: .semibold))
                             .monospacedDigit()
                             .foregroundStyle(.primary)
-
-                        Text(Formatters.percentPoints(acc.netWorthRatioPercent))
-                            .font(.caption.weight(.medium))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
                     }
 
-                    if acc.investableAmount > 0 && acc.fixedAmount > 0 {
-                        Text("投资 \(Formatters.wholeCurrency(acc.investableAmount, hidden: refreshStore.hideAmounts)) · 固定 \(Formatters.wholeCurrency(acc.fixedAmount, hidden: refreshStore.hideAmounts))")
-                            .font(.caption2)
-                            .monospacedDigit()
+                    HStack {
+                        Text("占比 \(Formatters.percentPoints(acc.netWorthRatioPercent))")
                             .foregroundStyle(.secondary)
-                    } else if !acc.subtitle.isEmpty {
-                        Text(acc.subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if acc.investableAmount > 0 && acc.fixedAmount > 0 {
+                            Text("投资 \(Formatters.wholeCurrency(acc.investableAmount, hidden: refreshStore.hideAmounts)) · 固定 \(Formatters.wholeCurrency(acc.fixedAmount, hidden: refreshStore.hideAmounts))")
+                                .foregroundStyle(.tertiary)
+                        } else if !acc.subtitle.isEmpty {
+                            Text(acc.subtitle)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
+                    .font(.caption2)
+                    .monospacedDigit()
 
                     GeometryReader { geo in
                         let width = max(geo.size.width, 1)
@@ -614,7 +631,8 @@ struct OverviewView: View {
                     .foregroundStyle(.quaternary)
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.vertical, 9)
+            .background(isHighlighted ? acc.color.opacity(0.08) : Color.clear)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -632,7 +650,7 @@ struct OverviewView: View {
             VStack(spacing: 6) {
                 Text("记下你的第一笔资产")
                     .font(.headline)
-                Text("按类别看配置，按账户好对账。\n大额存单、房产等固定资产可独立核算，不稀释投资比例。")
+                Text("按账户好对账，按类别看配置。\n定存、房产等固定资产独立核算，不稀释投资占比。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

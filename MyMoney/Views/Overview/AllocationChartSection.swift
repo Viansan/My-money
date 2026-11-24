@@ -1,5 +1,4 @@
 import SwiftUI
-import Charts
 
 /// 总览页分析视角枚举
 enum OverviewLens: String, CaseIterable, Identifiable {
@@ -10,8 +9,8 @@ enum OverviewLens: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// 环形图通用切片模型
-struct RingChartItem: Identifiable {
+/// 构成条切片模型
+struct CompositionBarItem: Identifiable {
     let id: UUID
     let name: String
     let amount: Double
@@ -20,24 +19,23 @@ struct RingChartItem: Identifiable {
     let color: Color
 }
 
-/// 嵌入式可交互环形图模块（与下方明细行融为同一视觉表面，消除模块割裂感）
-/// - 轻点环上色块即可高亮并在圆心显示该项金额、占比与目标差额；再点一次或点圆心即收回
+/// 高信息密度的比例构成条（类似 iPhone 储存空间构成条）
+/// - 彻底避免小屏圆环内数字重叠的问题，将视觉高度从 185pt 压缩至 ~48pt，让首屏完整露出下方明细
+/// - 轻点条上任意色块高亮对应分类并联动高亮下方列表行，再点一次或点 × 收回
 struct AllocationChartSection: View {
     @Binding var selectedLens: OverviewLens
+    @Binding var highlightedSliceID: UUID?
     let availableLenses: [OverviewLens]
     let snapshot: PortfolioSnapshot
     let hideAmounts: Bool
 
-    @State private var chartAngleSelection: Double?
-    @State private var selectedItemID: UUID?
-
-    private var chartItems: [RingChartItem] {
+    private var items: [CompositionBarItem] {
         switch selectedLens {
         case .investable:
             return snapshot.investableSlices
                 .filter { $0.amount > 0 && $0.amount.isFinite }
                 .map {
-                    RingChartItem(
+                    CompositionBarItem(
                         id: $0.id,
                         name: $0.name,
                         amount: $0.amount,
@@ -50,7 +48,7 @@ struct AllocationChartSection: View {
             return snapshot.fixedSlices
                 .filter { $0.amount > 0 && $0.amount.isFinite }
                 .map {
-                    RingChartItem(
+                    CompositionBarItem(
                         id: $0.id,
                         name: $0.name,
                         amount: $0.amount,
@@ -63,7 +61,7 @@ struct AllocationChartSection: View {
             return snapshot.accountSlices
                 .filter { $0.totalAmount > 0 && $0.totalAmount.isFinite }
                 .map {
-                    RingChartItem(
+                    CompositionBarItem(
                         id: $0.id,
                         name: $0.name,
                         amount: $0.totalAmount,
@@ -75,50 +73,34 @@ struct AllocationChartSection: View {
         }
     }
 
-    private var selectedItem: RingChartItem? {
-        guard let id = selectedItemID else { return nil }
-        return chartItems.first(where: { $0.id == id })
+    private var totalAmount: Double {
+        items.reduce(0.0) { $0 + $1.amount }
     }
 
-    private var centerTitle: String {
-        if let selectedItem {
-            return selectedItem.name
-        }
-        switch selectedLens {
-        case .investable: return "投资资产"
-        case .fixed: return "固定资产"
-        case .accounts: return "全部总净值"
-        }
+    private var selectedItem: CompositionBarItem? {
+        guard let id = highlightedSliceID else { return nil }
+        return items.first(where: { $0.id == id })
     }
 
-    private var centerAmount: Double {
-        if let selectedItem {
-            return selectedItem.amount
+    /// 按金额降序取前 3 项用于紧凑色点图例，其余合并为「其他」保持单行不拥挤
+    private var legendEntries: [(id: UUID?, name: String, percent: Double, color: Color)] {
+        let sorted = items.sorted { $0.amount > $1.amount }
+        if sorted.count <= 4 {
+            return sorted.map { ($0.id, $0.name, $0.percent, $0.color) }
         }
-        switch selectedLens {
-        case .investable: return snapshot.investableTotal
-        case .fixed: return snapshot.fixedTotal
-        case .accounts: return snapshot.totalNetWorth
+        let topThree = sorted.prefix(3)
+        let restPercent = sorted.dropFirst(3).reduce(0.0) { $0 + $1.percent }
+        var result: [(id: UUID?, name: String, percent: Double, color: Color)] = topThree.map {
+            ($0.id, $0.name, $0.percent, $0.color)
         }
-    }
-
-    private var centerSubtitle: String? {
-        if let selectedItem {
-            let pct = Formatters.percentPoints(selectedItem.percent)
-            if let devAmt = selectedItem.deviationAmount, !hideAmounts, abs(devAmt) >= 50 {
-                let tag = devAmt > 0 ? "超" : "差"
-                return "\(pct) · \(tag)\(Formatters.wholeCurrency(abs(devAmt)))"
-            }
-            return pct
+        if restPercent >= 0.1 {
+            result.append((nil, "其余", restPercent, Color(.systemGray3)))
         }
-        if selectedLens == .investable && snapshot.hasFixedHoldings {
-            return "不含固定资产"
-        }
-        return nil
+        return result
     }
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 10) {
             if availableLenses.count > 1 {
                 Picker("分析视角", selection: $selectedLens) {
                     ForEach(availableLenses) { lens in
@@ -128,106 +110,139 @@ struct AllocationChartSection: View {
                 .pickerStyle(.segmented)
                 .onChange(of: selectedLens) { _, _ in
                     Haptics.selection()
-                    selectedItemID = nil
-                    chartAngleSelection = nil
+                    highlightedSliceID = nil
                 }
             }
 
-            if chartItems.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "chart.pie")
-                        .font(.title2)
+            if items.isEmpty || totalAmount <= 0 {
+                HStack {
+                    Image(systemName: "chart.bar.xaxis")
                         .foregroundStyle(.tertiary)
                     Text("当前视角暂无金额")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 140)
+                .padding(.vertical, 10)
             } else {
-                ZStack {
-                    Chart(chartItems) { item in
-                        let isSelected = (selectedItemID == item.id)
-                        let isDimmed = (selectedItemID != nil && !isSelected)
-                        SectorMark(
-                            angle: .value("金额", item.amount),
-                            innerRadius: .ratio(0.67),
-                            outerRadius: .ratio(isSelected ? 1.0 : 0.94),
-                            angularInset: 1.5
-                        )
-                        .cornerRadius(4)
-                        .foregroundStyle(item.color)
-                        .opacity(isDimmed ? 0.30 : 1.0)
-                    }
-                    .chartLegend(.hidden)
-                    .chartAngleSelection(value: $chartAngleSelection)
-                    .onChange(of: chartAngleSelection) { _, newAngle in
-                        guard let newAngle else { return }
-                        handleAngleTap(newAngle)
-                    }
-                    .frame(height: 164)
+                // 1. 满宽比例构成条（与下方列表顺序一一对应，可点击任意色块）
+                GeometryReader { geo in
+                    let gap: CGFloat = 2
+                    let count = items.count
+                    let usableWidth = max(geo.size.width - gap * CGFloat(max(count - 1, 0)), 1)
+                    let minSegWidth: CGFloat = 5
 
-                    Button {
-                        if selectedItemID != nil {
-                            Haptics.selection()
-                            withAnimation(.snappy) {
-                                selectedItemID = nil
-                                chartAngleSelection = nil
+                    // 计算每段像素宽，确保极小占比（如 0.4%）依然可见可点且总宽严格贴合
+                    let rawWidths: [CGFloat] = items.map { item in
+                        max(usableWidth * CGFloat(item.amount / totalAmount), minSegWidth)
+                    }
+                    let rawSum = max(rawWidths.reduce(0, +), 1)
+                    let scale = usableWidth / rawSum
+
+                    HStack(spacing: gap) {
+                        ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                            let segWidth = rawWidths[idx] * scale
+                            let isSelected = (highlightedSliceID == item.id)
+                            let isDimmed = (highlightedSliceID != nil && !isSelected)
+
+                            ZStack {
+                                Color.clear
+                                RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                                    .fill(item.color)
+                                    .frame(height: isSelected ? 14 : 11)
+                                    .opacity(isDimmed ? 0.28 : 1.0)
+                            }
+                            .frame(width: max(segWidth, 3), height: 22)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                toggleSelection(item.id)
                             }
                         }
-                    } label: {
-                        VStack(spacing: 2) {
-                            Text(centerTitle)
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .center)
+                }
+                .frame(height: 22)
 
-                            Text(Formatters.currency(centerAmount, hidden: hideAmounts, compact: true))
-                                .font(.system(.headline, design: .rounded, weight: .bold))
+                // 2. 动态信息条：选中色块时显示精准数字读数；未选中时显示紧凑色点图例
+                if let selected = selectedItem {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(selected.color)
+                            .frame(width: 7, height: 7)
+
+                        Text(selected.name)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        Text("\(Formatters.wholeCurrency(selected.amount, hidden: hideAmounts)) · \(Formatters.percentPoints(selected.percent))")
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+
+                        Spacer(minLength: 4)
+
+                        if let devAmt = selected.deviationAmount, !hideAmounts, abs(devAmt) >= 50 {
+                            Text("\(devAmt >= 0 ? "超" : "差") \(Formatters.wholeCurrency(abs(devAmt)))")
+                                .font(.caption2.weight(.semibold))
                                 .monospacedDigit()
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-
-                            if let sub = centerSubtitle {
-                                Text(sub)
-                                    .font(.system(size: 10.5, weight: .medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(selectedItem?.color ?? .secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.8)
-                            }
+                                .foregroundStyle(devAmt >= 0 ? Color.orange : Color.secondary)
                         }
-                        .frame(maxWidth: 108)
+
+                        Button {
+                            Haptics.selection()
+                            withAnimation(.snappy) { highlightedSliceID = nil }
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(selected.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                } else {
+                    HStack(spacing: 10) {
+                        ForEach(Array(legendEntries.enumerated()), id: \.offset) { _, entry in
+                            Button {
+                                if let id = entry.id {
+                                    toggleSelection(id)
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Circle()
+                                        .fill(entry.color)
+                                        .frame(width: 6, height: 6)
+                                    Text(entry.name)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                    Text(Formatters.percentPoints(entry.percent, digits: 0))
+                                        .monospacedDigit()
+                                        .foregroundStyle(.tertiary)
+                                }
+                                .font(.caption2)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Spacer(minLength: 0)
+                    }
                 }
             }
         }
         .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.vertical, 11)
     }
 
-    private func handleAngleTap(_ angle: Double) {
-        var cumulative = 0.0
-        var matched: UUID?
-        for item in chartItems {
-            cumulative += item.amount
-            if angle <= cumulative {
-                matched = item.id
-                break
-            }
-        }
-        guard let matched else { return }
+    private func toggleSelection(_ id: UUID) {
         Haptics.selection()
         withAnimation(.snappy(duration: 0.2)) {
-            if selectedItemID == matched {
-                selectedItemID = nil
+            if highlightedSliceID == id {
+                highlightedSliceID = nil
             } else {
-                selectedItemID = matched
+                highlightedSliceID = id
             }
         }
-        chartAngleSelection = nil
     }
 }

@@ -2,8 +2,8 @@ import SwiftUI
 
 /// 持仓页分组维度
 enum HoldingsGroupMode: String, CaseIterable, Identifiable {
-    case byCategory = "按类别"
     case byAccount = "按账户"
+    case byCategory = "按类别"
 
     var id: String { rawValue }
 }

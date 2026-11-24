@@ -32,7 +32,7 @@ final class PortfolioRefreshStore {
 
     // MARK: - 导航与下钻状态
     var selectedTab: AppTab = .overview
-    var holdingsGroupMode: HoldingsGroupMode = .byCategory
+    var holdingsGroupMode: HoldingsGroupMode = .byAccount
     var holdingsPoolFilter: PoolFilterOption = .all
     var activeDrilldown: HoldingsDrilldownFilter?
 

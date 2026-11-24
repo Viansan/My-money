@@ -64,7 +64,7 @@ struct CategoryListView: View {
                 }
                 .textCase(nil)
             } footer: {
-                Text("目标占比为选填项。填写后总览页会同步展示目标金额与实际差额。")
+                Text("目标占比选填，填后展示参考金额与差额。")
             }
 
             Section {
@@ -88,7 +88,7 @@ struct CategoryListView: View {
                 Text("固定资产类别（不稀释投资占比）")
                     .textCase(nil)
             } footer: {
-                Text("适用于大额存单、定期存款、房产、公积金等不参与日常投资配比的资产。")
+                Text("定存、房产等大额资产，不稀释投资占比。")
             }
         }
         .listSectionSpacing(.compact)

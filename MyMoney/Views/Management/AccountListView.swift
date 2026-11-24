@@ -32,7 +32,7 @@ struct AccountListView: View {
                     Label("新增存放账户", systemImage: "plus.circle.fill")
                 }
             } footer: {
-                Text("将不同券商、银行或理财平台建为独立账户后，可在「资产」页切为「按账户对账」，逐个核对账面余额。")
+                Text("按券商、银行分账户，方便逐一核对余额。")
             }
         }
         .listSectionSpacing(.compact)

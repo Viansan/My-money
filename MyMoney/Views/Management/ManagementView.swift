@@ -39,10 +39,11 @@ struct ManagementView: View {
                         CategoryListView()
                     } label: {
                         HStack {
-                            Label("资产类别管理", systemImage: "square.grid.2x2.fill")
+                            Label("资产类别", systemImage: "square.grid.2x2.fill")
                             Spacer()
-                            Text("\(categories.count) 个类别")
+                            Text("\(categories.count)")
                                 .font(.footnote)
+                                .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -51,17 +52,18 @@ struct ManagementView: View {
                         AccountListView()
                     } label: {
                         HStack {
-                            Label("账户/渠道管理", systemImage: "building.columns.fill")
+                            Label("存放账户", systemImage: "building.columns.fill")
                             Spacer()
-                            Text("\(accounts.count) 个账户")
+                            Text("\(accounts.count)")
                                 .font(.footnote)
+                                .monospacedDigit()
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
 
                 // 2. 显示与偏好设置
-                Section("显示与偏好") {
+                Section("显示") {
                     Picker("盈亏颜色", selection: $bindableStore.pnlColorScheme) {
                         ForEach(PnLColorScheme.allCases) { item in
                             Text(item.title).tag(item)
@@ -74,7 +76,7 @@ struct ManagementView: View {
                         }
                     }
 
-                    Toggle("隐藏具体金额（隐私模式）", isOn: $bindableStore.hideAmounts)
+                    Toggle("隐私模式", isOn: $bindableStore.hideAmounts)
                 }
 
                 // 3. 本地 JSON 备份与恢复
@@ -83,32 +85,32 @@ struct ManagementView: View {
                         Haptics.lightImpact()
                         prepareAndExportBackup()
                     } label: {
-                        Label("导出 JSON 备份文件", systemImage: "square.and.arrow.up")
+                        Label("导出备份", systemImage: "square.and.arrow.up")
                     }
 
                     Button {
                         Haptics.lightImpact()
                         showingFileImporter = true
                     } label: {
-                        Label("从 JSON 备份恢复数据", systemImage: "square.and.arrow.down")
+                        Label("导入恢复", systemImage: "square.and.arrow.down")
                     }
                 } header: {
                     Text("本地备份")
                 } footer: {
-                    Text("数据 100% 存在本机，不上传云端。换机或重装前建议导出备份至「文件」或 iCloud 云盘。")
+                    Text("纯本地存储，换机前可导出 JSON 备份。")
                 }
 
-                // 4. 空账本时才出现演示体验入口（已有真实资产后隐藏，杜绝误点污染账本）
+                // 4. 空账本时才出现演示体验入口
                 if holdings.isEmpty {
-                    Section("快速体验") {
+                    Section {
                         Button {
                             do {
                                 try DataBackupService.loadSampleShowcase(in: modelContext)
                                 Haptics.success()
                                 refreshStore.showToast(
                                     style: .success,
-                                    message: "已载入演示数据，可去「总览」查看双池隔离效果",
-                                    autoDismissSeconds: 3.0
+                                    message: "已载入演示数据",
+                                    autoDismissSeconds: 2.5
                                 )
                             } catch {
                                 errorAlertMessage = error.localizedDescription
@@ -119,40 +121,29 @@ struct ManagementView: View {
                     }
                 }
 
-                Section {
-                    HStack {
-                        Text("存储方式")
-                        Spacer()
-                        Text("SwiftData 纯本地")
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.footnote)
-
-                    HStack {
-                        Text("行情来源")
-                        Spacer()
-                        Text("腾讯行情 · 东财官方净值")
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.footnote)
-                } header: {
-                    Text("关于")
-                }
-
-                // 5. 危险操作独立隔离在页面最底部，且仅在有持仓时出现
+                // 5. 危险操作（仅非空时出现）
                 if !holdings.isEmpty {
                     Section {
                         Button(role: .destructive) {
                             Haptics.warning()
                             showingClearHoldingsConfirm = true
                         } label: {
-                            Label("清空全部持仓记录", systemImage: "trash")
+                            Label("清空全部持仓", systemImage: "trash")
                         }
-                    } header: {
-                        Text("危险操作")
                     } footer: {
-                        Text("清空前建议先导出 JSON 备份。此操作会删除所有资产金额，但保留自定义分类与账户。")
+                        Text("仅清空持仓，保留分类与账户。")
                     }
+                }
+
+                // 6. 极简收起式底部版本与来源注脚
+                Section {
+                    EmptyView()
+                } footer: {
+                    Text("纯本地 SwiftData 存储 · 腾讯 / 东财行情 · v1.0")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 2)
                 }
             }
             .listSectionSpacing(.compact)

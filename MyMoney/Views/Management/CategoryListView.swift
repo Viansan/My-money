@@ -1,0 +1,383 @@
+import SwiftUI
+import SwiftData
+
+/// 资产类别管理页（支持自由增删改、切换投资池/固定池、选填目标比例与拖拽排序）
+struct CategoryListView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \AssetCategory.sortOrder) private var categories: [AssetCategory]
+    @Query private var holdings: [AssetHolding]
+
+    @State private var showingCreatePool: AssetPool?
+    @State private var editingCategory: AssetCategory?
+    @State private var pendingDeleteCategory: AssetCategory?
+
+    private var investableCategories: [AssetCategory] {
+        categories.filter { $0.pool == .investable }
+    }
+
+    private var fixedCategories: [AssetCategory] {
+        categories.filter { $0.pool == .fixed }
+    }
+
+    private var configuredTargetSum: Double? {
+        let targets = investableCategories.compactMap(\.targetRatio)
+        return targets.isEmpty ? nil : targets.reduce(0, +)
+    }
+
+    var body: some View {
+        List {
+            Section {
+                if investableCategories.isEmpty {
+                    Text("暂无投资资产类别")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(investableCategories) { category in
+                        categoryRow(category)
+                    }
+                    .onMove(perform: moveInvestableCategories)
+                }
+
+                Button {
+                    showingCreatePool = .investable
+                } label: {
+                    Label("新增投资资产类别", systemImage: "plus.circle.fill")
+                }
+            } header: {
+                HStack {
+                    Text("投资资产类别（参与配置比例）")
+                    Spacer()
+                    if let sum = configuredTargetSum {
+                        Text("目标合计 \(Formatters.percentPoints(sum, digits: 0))")
+                            .monospacedDigit()
+                            .foregroundStyle(abs(sum - 100) < 0.1 ? Color.secondary : Color.orange)
+                    }
+                }
+                .textCase(nil)
+            } footer: {
+                Text("目标占比为选填项。填写后总览页将对比实际占比与目标偏差；不填则仅展示实际占比。")
+            }
+
+            Section {
+                if fixedCategories.isEmpty {
+                    Text("暂无固定/底仓类别")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(fixedCategories) { category in
+                        categoryRow(category)
+                    }
+                    .onMove(perform: moveFixedCategories)
+                }
+
+                Button {
+                    showingCreatePool = .fixed
+                } label: {
+                    Label("新增固定/底仓类别", systemImage: "plus.circle.fill")
+                }
+            } header: {
+                Text("固定/底仓类别（独立核算，不稀释投资占比）")
+                    .textCase(nil)
+            } footer: {
+                Text("适用于大额存单底仓、房产、车辆、公积金等不参与日常仓位调配的资产。")
+            }
+        }
+        .navigationTitle("资产类别管理")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                EditButton()
+            }
+        }
+        .sheet(item: $showingCreatePool) { pool in
+            CategoryEditorSheet(existingCategory: nil, defaultPool: pool)
+        }
+        .sheet(item: $editingCategory) { cat in
+            CategoryEditorSheet(existingCategory: cat)
+        }
+        .confirmationDialog(
+            deleteDialogTitle,
+            isPresented: Binding(
+                get: { pendingDeleteCategory != nil },
+                set: { if !$0 { pendingDeleteCategory = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("删除类别", role: .destructive) {
+                if let target = pendingDeleteCategory {
+                    modelContext.delete(target)
+                    try? modelContext.save()
+                }
+                pendingDeleteCategory = nil
+            }
+            Button("取消", role: .cancel) {
+                pendingDeleteCategory = nil
+            }
+        } message: {
+            if let target = pendingDeleteCategory {
+                let count = holdings.filter { $0.category?.id == target.id }.count
+                if count > 0 {
+                    Text("该类别下关联了 \(count) 项资产。删除类别不会删除资产金额，它们将变为「未分类」。")
+                }
+            }
+        }
+    }
+
+    private var deleteDialogTitle: String {
+        guard let target = pendingDeleteCategory else { return "" }
+        return "确认删除类别「\(target.name)」？"
+    }
+
+    private func categoryRow(_ category: AssetCategory) -> some View {
+        let count = holdings.filter { $0.category?.id == category.id }.count
+        return Button {
+            editingCategory = category
+        } label: {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(category.tintColor.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    Image(systemName: category.iconName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(category.tintColor)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(category.name)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                    Text("\(count) 项持仓")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if category.pool == .investable, let target = category.targetRatio {
+                    Text("目标 \(Formatters.percentPoints(target, digits: 0))")
+                        .font(.caption.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color(.tertiarySystemFill), in: Capsule())
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                pendingDeleteCategory = category
+            } label: {
+                Label("删除", systemImage: "trash")
+            }
+        }
+    }
+
+    private func moveInvestableCategories(from source: IndexSet, to destination: Int) {
+        var reordered = investableCategories
+        reordered.move(fromOffsets: source, toOffset: destination)
+        let combined = reordered + fixedCategories
+        for (idx, item) in combined.enumerated() {
+            item.sortOrder = idx
+        }
+        try? modelContext.save()
+    }
+
+    private func moveFixedCategories(from source: IndexSet, to destination: Int) {
+        var reordered = fixedCategories
+        reordered.move(fromOffsets: source, toOffset: destination)
+        let combined = investableCategories + reordered
+        for (idx, item) in combined.enumerated() {
+            item.sortOrder = idx
+        }
+        try? modelContext.save()
+    }
+}
+
+/// 新建 / 编辑单个资产类别弹窗
+struct CategoryEditorSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \AssetCategory.sortOrder) private var allCategories: [AssetCategory]
+
+    let existingCategory: AssetCategory?
+    var defaultPool: AssetPool = .investable
+    var onSaved: ((AssetCategory) -> Void)? = nil
+
+    @State private var name: String = ""
+    @State private var pool: AssetPool = .investable
+    @State private var colorToken: CategoryColorToken = .blue
+    @State private var iconName: String = "chart.pie.fill"
+    @State private var enableTargetRatio: Bool = false
+    @State private var targetRatioText: String = ""
+
+    private enum Field: Hashable {
+        case name
+        case targetRatio
+    }
+
+    @FocusState private var focusedField: Field?
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 5)
+    private let iconColumns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 6)
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("基本属性") {
+                    TextField("类别名称（如：海外指数、大额存单）", text: $name)
+                        .focused($focusedField, equals: .name)
+
+                    Picker("资金池归属", selection: $pool) {
+                        ForEach(AssetPool.allCases) { option in
+                            Text(option.title).tag(option)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+
+                    Text(pool.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                if pool == .investable {
+                    Section {
+                        Toggle("设置参考目标占比（选填）", isOn: $enableTargetRatio)
+
+                        if enableTargetRatio {
+                            HStack {
+                                Text("目标占比（%）")
+                                Spacer()
+                                TextField("如 30", text: $targetRatioText)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .focused($focusedField, equals: .targetRatio)
+                                Text("%")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("目标比例（可选）")
+                    }
+                }
+
+                Section("标识颜色") {
+                    LazyVGrid(columns: columns, spacing: 14) {
+                        ForEach(CategoryColorToken.allCases) { token in
+                            Button {
+                                colorToken = token
+                            } label: {
+                                ZStack {
+                                    Circle()
+                                        .fill(token.color)
+                                        .frame(width: 34, height: 34)
+                                    if colorToken == token {
+                                        Image(systemName: "checkmark")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+
+                Section("图标") {
+                    LazyVGrid(columns: iconColumns, spacing: 12) {
+                        ForEach(PresetIcons.categoryIcons, id: \.self) { symbol in
+                            Button {
+                                iconName = symbol
+                            } label: {
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(iconName == symbol ? colorToken.color.opacity(0.2) : Color(.tertiarySystemFill))
+                                        .frame(width: 40, height: 40)
+                                    Image(systemName: symbol)
+                                        .font(.callout.weight(.semibold))
+                                        .foregroundStyle(iconName == symbol ? colorToken.color : .secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+            .navigationTitle(existingCategory == nil ? "新建资产类别" : "编辑资产类别")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { saveCategory() }
+                        .fontWeight(.semibold)
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { focusedField = nil }
+                }
+            }
+            .onAppear {
+                if let cat = existingCategory {
+                    name = cat.name
+                    pool = cat.pool
+                    colorToken = cat.colorToken
+                    iconName = cat.iconName
+                    if let target = cat.targetRatio {
+                        enableTargetRatio = true
+                        targetRatioText = Formatters.editableDecimal(target, maxDecimals: 1)
+                    }
+                } else {
+                    pool = defaultPool
+                    colorToken = defaultPool == .fixed ? .amber : .blue
+                    iconName = defaultPool == .fixed ? "lock.doc.fill" : "chart.pie.fill"
+                }
+            }
+        }
+    }
+
+    private func saveCategory() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let parsedTarget: Double? = {
+            guard pool == .investable, enableTargetRatio,
+                  let v = Formatters.parseDouble(targetRatioText), v > 0 else {
+                return nil
+            }
+            return min(v, 100)
+        }()
+
+        if let target = existingCategory {
+            target.name = trimmed
+            target.pool = pool
+            target.colorToken = colorToken
+            target.iconName = iconName
+            target.targetRatio = parsedTarget
+            try? modelContext.save()
+            onSaved?(target)
+        } else {
+            let nextOrder = (allCategories.map(\.sortOrder).max() ?? -1) + 1
+            let created = AssetCategory(
+                name: trimmed,
+                pool: pool,
+                colorToken: colorToken,
+                iconName: iconName,
+                targetRatio: parsedTarget,
+                sortOrder: nextOrder
+            )
+            modelContext.insert(created)
+            try? modelContext.save()
+            onSaved?(created)
+        }
+        dismiss()
+    }
+}

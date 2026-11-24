@@ -172,6 +172,9 @@ final class PortfolioRefreshStore {
             note: holding.note,
             sortOrder: holding.sortOrder,
             fallbackPoolRaw: holding.fallbackPoolRaw,
+            annualRate: holding.annualRate,
+            startDate: holding.startDate,
+            maturityDate: holding.maturityDate,
             categoryID: holding.category?.id,
             accountID: holding.account?.id
         )
@@ -213,6 +216,9 @@ final class PortfolioRefreshStore {
             note: dto.note,
             sortOrder: dto.sortOrder,
             fallbackPool: AssetPool(rawValue: dto.fallbackPoolRaw) ?? .investable,
+            annualRate: dto.annualRate,
+            startDate: dto.startDate,
+            maturityDate: dto.maturityDate,
             category: dto.categoryID.flatMap { id in allCategories.first(where: { $0.id == id }) },
             account: dto.accountID.flatMap { id in allAccounts.first(where: { $0.id == id }) }
         )

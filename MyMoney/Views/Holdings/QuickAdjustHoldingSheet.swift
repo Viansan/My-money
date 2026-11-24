@@ -115,9 +115,35 @@ struct QuickAdjustHoldingSheet: View {
         }
     }
 
+    private var isFixedAsset: Bool {
+        holding.effectivePool == .fixed
+    }
+
+    private var hasFixedDepositMeta: Bool {
+        isFixedAsset && (holding.annualRate != nil || holding.maturityDate != nil)
+    }
+
+    private var previewDepositInterestText: String? {
+        guard isFixedAsset, let rate = holding.annualRate, rate > 0, previewMarketValue > 0 else {
+            return nil
+        }
+        let annual = previewMarketValue * (rate / 100.0)
+        if let start = holding.startDate, let mat = holding.maturityDate, mat > start {
+            let cal = Calendar.current
+            let days = cal.dateComponents([.day], from: cal.startOfDay(for: start), to: cal.startOfDay(for: mat)).day ?? 0
+            if days > 0 {
+                let total = annual * (Double(days) / 365.0)
+                return "预计到期息 +\(Formatters.wholeCurrency(total))"
+            }
+        }
+        return "预计年息 \(Formatters.wholeCurrency(annual))"
+    }
+
     private var quickStepPresets: [(label: String, amount: Double)] {
         if usesShares {
             return [("100份", 100), ("500份", 500), ("1000份", 1000)]
+        } else if isFixedAsset {
+            return [("1万", 10_000), ("5万", 50_000), ("10万", 100_000)]
         } else {
             return [("1千", 1000), ("5千", 5000), ("1万", 10000)]
         }
@@ -149,6 +175,20 @@ struct QuickAdjustHoldingSheet: View {
                             }
                             .font(.caption)
                             .foregroundStyle(.secondary)
+
+                            if hasFixedDepositMeta {
+                                HStack(spacing: 4) {
+                                    if let rate = holding.annualRate, rate > 0 {
+                                        Text("年化 \(Formatters.annualRate(rate))")
+                                    }
+                                    if let mat = holding.maturityDate {
+                                        Text("\(holding.annualRate != nil ? "· " : "")\(Formatters.dateYMD(mat)) 到期")
+                                    }
+                                }
+                                .font(.caption2)
+                                .monospacedDigit()
+                                .foregroundStyle(holding.isMaturitySoonOrPast ? Color.orange : Color.secondary)
+                            }
                         }
 
                         Spacer()
@@ -166,6 +206,12 @@ struct QuickAdjustHoldingSheet: View {
                                     .monospacedDigit()
                                     .foregroundStyle(Color.accentColor)
                                     .contentTransition(.numericText(value: valueChangeDelta))
+                                    .transition(.opacity)
+                            } else if let interestText = previewDepositInterestText {
+                                Text(interestText)
+                                    .font(.caption.weight(.medium))
+                                    .monospacedDigit()
+                                    .foregroundStyle(CategoryColorToken.amber.color)
                                     .transition(.opacity)
                             } else if let cost = previewTotalCost {
                                 let pnl = previewMarketValue - cost
@@ -195,7 +241,7 @@ struct QuickAdjustHoldingSheet: View {
 
                     if adjustStyle == .replaceTotal {
                         HStack {
-                            Text(usesShares ? "最新持有份额" : "最新总金额（元）")
+                            Text(usesShares ? "最新持有份额" : (isFixedAsset ? "最新本金 / 金额（元）" : "最新总金额（元）"))
                             Spacer()
                             TextField("0", text: $primaryNumberText)
                                 .keyboardType(.decimalPad)
@@ -315,61 +361,63 @@ struct QuickAdjustHoldingSheet: View {
                         }
                     }
                 } header: {
-                    Text(usesShares ? "份额与单价" : "当前金额")
+                    Text(usesShares ? "份额与单价" : (isFixedAsset ? "本金 / 当前金额" : "当前金额"))
                 }
 
-                // 选填成本调整
-                Section {
-                    Toggle("记录投入成本（算盈亏）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
+                // 选填成本调整（固定资产若未记录成本则不打扰）
+                if !isFixedAsset || holding.totalCost != nil {
+                    Section {
+                        Toggle("记录投入成本（算盈亏）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
 
-                    if trackCost {
-                        if adjustStyle == .deltaChange {
-                            HStack {
-                                Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
-                                Spacer()
-                                TextField("不填保持原成本", text: $deltaPrincipalText)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .monospacedDigit()
-                                    .focused($focusedField, equals: .deltaPrincipal)
-                            }
-
-                            if let est = estimatedDeltaPrincipal {
-                                Button {
-                                    Haptics.selection()
-                                    deltaPrincipalText = Formatters.editableDecimal(est, maxDecimals: 2)
-                                } label: {
-                                    Label("按当前单价自动填入 \(Formatters.currency(est))", systemImage: "wand.and.stars")
-                                        .font(.caption.weight(.medium))
+                        if trackCost {
+                            if adjustStyle == .deltaChange {
+                                HStack {
+                                    Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
+                                    Spacer()
+                                    TextField("不填保持原成本", text: $deltaPrincipalText)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .monospacedDigit()
+                                        .focused($focusedField, equals: .deltaPrincipal)
                                 }
-                            }
-                        } else {
-                            if usesShares {
-                                Picker("成本口径", selection: $costEntryStyle) {
-                                    ForEach(CostEntryStyle.allCases) { item in
-                                        Text(item.title).tag(item)
+
+                                if let est = estimatedDeltaPrincipal {
+                                    Button {
+                                        Haptics.selection()
+                                        deltaPrincipalText = Formatters.editableDecimal(est, maxDecimals: 2)
+                                    } label: {
+                                        Label("按当前单价自动填入 \(Formatters.currency(est))", systemImage: "wand.and.stars")
+                                            .font(.caption.weight(.medium))
                                     }
                                 }
-                                .pickerStyle(.segmented)
-                                .onChange(of: costEntryStyle) { _, newStyle in
-                                    Haptics.selection()
-                                    syncCostInputField(for: newStyle)
+                            } else {
+                                if usesShares {
+                                    Picker("成本口径", selection: $costEntryStyle) {
+                                        ForEach(CostEntryStyle.allCases) { item in
+                                            Text(item.title).tag(item)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .onChange(of: costEntryStyle) { _, newStyle in
+                                        Haptics.selection()
+                                        syncCostInputField(for: newStyle)
+                                    }
+                                }
+
+                                HStack {
+                                    Text(usesShares && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
+                                    Spacer()
+                                    TextField("0", text: $costInputText)
+                                        .keyboardType(.decimalPad)
+                                        .multilineTextAlignment(.trailing)
+                                        .monospacedDigit()
+                                        .focused($focusedField, equals: .costInput)
                                 }
                             }
-
-                            HStack {
-                                Text(usesShares && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
-                                Spacer()
-                                TextField("0", text: $costInputText)
-                                    .keyboardType(.decimalPad)
-                                    .multilineTextAlignment(.trailing)
-                                    .monospacedDigit()
-                                    .focused($focusedField, equals: .costInput)
-                            }
                         }
+                    } header: {
+                        Text("成本与盈亏（选填）")
                     }
-                } header: {
-                    Text("成本与盈亏（选填）")
                 }
 
                 Section {
@@ -378,8 +426,11 @@ struct QuickAdjustHoldingSheet: View {
                         onRequestFullEdit()
                         dismiss()
                     } label: {
-                        Label("修改名称、分类、账户或备注...", systemImage: "slider.horizontal.3")
-                            .font(.subheadline)
+                        Label(
+                            isFixedAsset ? "修改利率、到期日、名称或备注..." : "修改名称、分类、账户或备注...",
+                            systemImage: "slider.horizontal.3"
+                        )
+                        .font(.subheadline)
                     }
                 }
             }

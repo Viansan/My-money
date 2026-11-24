@@ -173,8 +173,35 @@ enum Formatters {
         return Double(cleaned)
     }
 
+    private static let isoDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
     static func shortDateTime(_ date: Date) -> String {
         shortTimeFormatter.string(from: date)
+    }
+
+    static func dateYMD(_ date: Date) -> String {
+        isoDateFormatter.string(from: date)
+    }
+
+    static func annualRate(_ rate: Double) -> String {
+        String(format: "%.2f%%", rate)
+    }
+
+    static func maturityCountdownText(days: Int) -> String {
+        if days < 0 {
+            return "已到期 \(abs(days)) 天"
+        } else if days == 0 {
+            return "今日到期"
+        } else if days <= 30 {
+            return "剩 \(days) 天到期"
+        } else {
+            return "剩 \(days) 天"
+        }
     }
 
     static func backupFilename(date: Date = .now) -> String {

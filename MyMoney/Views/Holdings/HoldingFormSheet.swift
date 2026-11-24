@@ -26,6 +26,21 @@ struct HoldingFormSheet: View {
     var preselectedAccount: AssetAccount? = nil
     var preselectedPool: AssetPool = .investable
 
+    private struct TermPreset: Identifiable {
+        let label: String
+        let months: Int
+        var id: Int { months }
+    }
+
+    private static let termPresets: [TermPreset] = [
+        TermPreset(label: "3个月", months: 3),
+        TermPreset(label: "6个月", months: 6),
+        TermPreset(label: "1年", months: 12),
+        TermPreset(label: "2年", months: 24),
+        TermPreset(label: "3年", months: 36),
+        TermPreset(label: "5年", months: 60),
+    ]
+
     @State private var entryKind: EntryKind = .manualAmount
     /// 系统自动识别出的真实底层模式（.exchangeSecurity 或 .otcFund）
     @State private var resolvedQuoteMode: ValuationMode = .exchangeSecurity
@@ -46,6 +61,12 @@ struct HoldingFormSheet: View {
     @State private var costInputText: String = ""
     @State private var note: String = ""
 
+    // 固定资产 / 存单专属输入项
+    @State private var annualRateText: String = ""
+    @State private var hasMaturityDate: Bool = false
+    @State private var startDate: Date = .now
+    @State private var maturityDate: Date = Calendar.current.date(byAdding: .year, value: 1, to: .now) ?? .now
+
     @State private var isLookingUpQuote: Bool = false
     @State private var lookupCandidates: [QuoteResult] = []
     @State private var lookupStatusText: String?
@@ -65,12 +86,31 @@ struct HoldingFormSheet: View {
         case latestPrice
         case manualAmount
         case costInput
+        case annualRate
         case note
     }
 
     @FocusState private var focusedField: Field?
 
     private var isEditing: Bool { existingHolding != nil }
+
+    private var selectedCategory: AssetCategory? {
+        categories.first(where: { $0.id == selectedCategoryID })
+    }
+
+    private var isFixedAsset: Bool {
+        if let selectedCategory {
+            return selectedCategory.pool == .fixed
+        }
+        if let item = existingHolding {
+            return item.effectivePool == .fixed
+        }
+        return preselectedPool == .fixed
+    }
+
+    private var showEntryKindPicker: Bool {
+        !isFixedAsset || entryKind == .quoteTracked
+    }
 
     private var effectiveValuationMode: ValuationMode {
         entryKind == .manualAmount ? .manualAmount : resolvedQuoteMode
@@ -93,7 +133,7 @@ struct HoldingFormSheet: View {
     }
 
     private var computedTotalCost: Double? {
-        guard trackCost, let val = Formatters.parseDouble(costInputText), val >= 0 else {
+        guard !isFixedAsset, trackCost, let val = Formatters.parseDouble(costInputText), val >= 0 else {
             return nil
         }
         if entryKind == .quoteTracked && costEntryStyle == .unitCostPrice {
@@ -102,12 +142,63 @@ struct HoldingFormSheet: View {
         return val
     }
 
+    private var parsedAnnualRate: Double? {
+        guard isFixedAsset, let val = Formatters.parseDouble(annualRateText), val > 0 else {
+            return nil
+        }
+        return val
+    }
+
+    private var termDaysCount: Int? {
+        guard isFixedAsset, hasMaturityDate, maturityDate > startDate else { return nil }
+        let cal = Calendar.current
+        let days = cal.dateComponents([.day], from: cal.startOfDay(for: startDate), to: cal.startOfDay(for: maturityDate)).day ?? 0
+        return days > 0 ? days : nil
+    }
+
+    private var previewAnnualInterest: Double? {
+        guard let rate = parsedAnnualRate, previewMarketValue > 0 else { return nil }
+        return previewMarketValue * (rate / 100.0)
+    }
+
+    private var previewMaturityInterest: Double? {
+        guard let annual = previewAnnualInterest, let days = termDaysCount else { return nil }
+        return annual * (Double(days) / 365.0)
+    }
+
     private var canSave: Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var hasUnsavedChanges: Bool {
         if let item = existingHolding {
+            let rateChanged: Bool = {
+                switch (item.annualRate, parsedAnnualRate) {
+                case (nil, nil): return false
+                case (let old?, let new?): return abs(old - new) > 0.001
+                default: return true
+                }
+            }()
+            let maturityChanged: Bool = {
+                let cal = Calendar.current
+                let newMat: Date? = (isFixedAsset && hasMaturityDate) ? maturityDate : nil
+                let newStart: Date? = (isFixedAsset && hasMaturityDate) ? startDate : nil
+                let matDiff: Bool = {
+                    switch (item.maturityDate, newMat) {
+                    case (nil, nil): return false
+                    case (let a?, let b?): return !cal.isDate(a, inSameDayAs: b)
+                    default: return true
+                    }
+                }()
+                let startDiff: Bool = {
+                    switch (item.startDate, newStart) {
+                    case (nil, nil): return false
+                    case (let a?, let b?): return !cal.isDate(a, inSameDayAs: b)
+                    default: return true
+                    }
+                }()
+                return matDiff || startDiff
+            }()
             return item.name != name.trimmingCharacters(in: .whitespacesAndNewlines)
                 || item.valuationMode != effectiveValuationMode
                 || item.code != (entryKind == .quoteTracked ? code.trimmingCharacters(in: .whitespacesAndNewlines) : "")
@@ -116,23 +207,27 @@ struct HoldingFormSheet: View {
                 || item.category?.id != selectedCategoryID
                 || item.account?.id != selectedAccountID
                 || item.note != note.trimmingCharacters(in: .whitespacesAndNewlines)
+                || rateChanged
+                || maturityChanged
         }
-        return !name.isEmpty || !code.isEmpty || !sharesText.isEmpty || !manualAmountText.isEmpty || !note.isEmpty
+        return !name.isEmpty || !code.isEmpty || !sharesText.isEmpty || !manualAmountText.isEmpty || !note.isEmpty || !annualRateText.isEmpty || hasMaturityDate
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                // 1. 计价方式与智能代码识别
+                // 1. 计价方式与智能代码识别（固定资产自动隐藏证券/基金切换）
                 Section {
-                    Picker("记录方式", selection: $entryKind.animation(Motion.standard(reduceMotion: reduceMotion))) {
-                        ForEach(EntryKind.allCases) { kind in
-                            Text(kind.rawValue).tag(kind)
+                    if showEntryKindPicker {
+                        Picker("记录方式", selection: $entryKind.animation(Motion.standard(reduceMotion: reduceMotion))) {
+                            ForEach(EntryKind.allCases) { kind in
+                                Text(kind.rawValue).tag(kind)
+                            }
                         }
-                    }
-                    .pickerStyle(.segmented)
-                    .onChange(of: entryKind) { _, _ in
-                        Haptics.selection()
+                        .pickerStyle(.segmented)
+                        .onChange(of: entryKind) { _, _ in
+                            Haptics.selection()
+                        }
                     }
 
                     if entryKind == .quoteTracked {
@@ -227,7 +322,12 @@ struct HoldingFormSheet: View {
                         }
                     }
 
-                    TextField(entryKind == .manualAmount ? "资产名称（必填，如：活期存款、三年期存单）" : "名称（输入代码后自动填充，也可自定）", text: $name)
+                    TextField(
+                        entryKind == .quoteTracked
+                            ? "名称（输入代码后自动填充，也可自定）"
+                            : (isFixedAsset ? "资产名称（如：三年期大额存单、定期、房产）" : "资产名称（必填，如：活期存款、货币基金）"),
+                        text: $name
+                    )
                         .focused($focusedField, equals: .name)
                         .onChange(of: name) { _, newValue in
                             if focusedField == .name {
@@ -238,7 +338,7 @@ struct HoldingFormSheet: View {
                     Text("基本信息")
                 }
 
-                // 2. 当前价值
+                // 2. 当前价值 / 存单本金
                 Section {
                     if entryKind == .quoteTracked {
                         HStack {
@@ -273,7 +373,7 @@ struct HoldingFormSheet: View {
                         }
                     } else {
                         HStack {
-                            Text("当前金额（元）")
+                            Text(isFixedAsset ? "本金 / 当前金额（元）" : "当前金额（元）")
                             Spacer()
                             TextField("0.00", text: $manualAmountText)
                                 .keyboardType(.decimalPad)
@@ -283,7 +383,7 @@ struct HoldingFormSheet: View {
                         }
                     }
                 } header: {
-                    Text("当前价值")
+                    Text(isFixedAsset ? "本金与估值" : "当前价值")
                 }
 
                 // 3. 归属分类与存放账户
@@ -293,6 +393,13 @@ struct HoldingFormSheet: View {
                         ForEach(categories) { cat in
                             Text("[\(cat.pool == .investable ? "投资" : "固定")] \(cat.name)")
                                 .tag(Optional(cat.id))
+                        }
+                    }
+                    .onChange(of: selectedCategoryID) { _, _ in
+                        if isFixedAsset && entryKind == .quoteTracked
+                            && code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            && sharesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            entryKind = .manualAmount
                         }
                     }
 
@@ -319,61 +426,169 @@ struct HoldingFormSheet: View {
                 } header: {
                     Text("归属维度")
                 } footer: {
-                    if let selectedCat = categories.first(where: { $0.id == selectedCategoryID }) {
+                    if let selectedCat = selectedCategory {
                         Text(selectedCat.pool == .fixed
                              ? "归属「固定资产」，计入总净值，不稀释投资占比。"
                              : "归属「投资资产」，计入投资组合结构占比。")
                     }
                 }
 
-                // 4. 选填成本与备注
+                // 4. 固定资产专属「利率与存期」 / 投资资产「成本与盈亏」
                 Section {
-                    Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
-
-                    if trackCost {
-                        if entryKind == .quoteTracked {
-                            Picker("成本口径", selection: $costEntryStyle.animation(Motion.micro(reduceMotion: reduceMotion))) {
-                                ForEach(CostEntryStyle.allCases) { style in
-                                    Text(style.title).tag(style)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .onChange(of: costEntryStyle) { _, newStyle in
-                                Haptics.selection()
-                                convertCostStyle(to: newStyle)
-                            }
-                        }
-
+                    if isFixedAsset {
                         HStack {
-                            Text(entryKind == .quoteTracked && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
+                            Text("年化利率")
                             Spacer()
-                            TextField("0.00", text: $costInputText)
+                            TextField("如 2.35", text: $annualRateText)
                                 .keyboardType(.decimalPad)
                                 .multilineTextAlignment(.trailing)
                                 .monospacedDigit()
-                                .focused($focusedField, equals: .costInput)
+                                .focused($focusedField, equals: .annualRate)
+                            Text("%")
+                                .foregroundStyle(.secondary)
                         }
 
-                        if let totalCost = computedTotalCost {
-                            let pnl = previewMarketValue - totalCost
+                        Toggle("设置起息与到期日", isOn: $hasMaturityDate)
+                            .onChange(of: hasMaturityDate) { _, _ in
+                                Haptics.selection()
+                            }
+
+                        if hasMaturityDate {
+                            DatePicker("起息日", selection: $startDate, displayedComponents: .date)
+                                .onChange(of: startDate) { _, newStart in
+                                    if maturityDate <= newStart {
+                                        maturityDate = Calendar.current.date(byAdding: .year, value: 1, to: newStart) ?? newStart
+                                    }
+                                }
+
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("快捷存期")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        ForEach(Self.termPresets) { preset in
+                                            let expected = Calendar.current.date(byAdding: .month, value: preset.months, to: startDate)
+                                            let isSelected = expected.map { Calendar.current.isDate(maturityDate, inSameDayAs: $0) } ?? false
+                                            Button {
+                                                Haptics.selection()
+                                                if let target = expected {
+                                                    maturityDate = target
+                                                }
+                                            } label: {
+                                                Text(preset.label)
+                                                    .font(.caption.weight(.medium))
+                                                    .foregroundStyle(isSelected ? .white : .primary)
+                                                    .padding(.horizontal, 10)
+                                                    .padding(.vertical, 5)
+                                                    .background(
+                                                        isSelected ? Color.accentColor : Color(.tertiarySystemFill),
+                                                        in: Capsule()
+                                                    )
+                                            }
+                                            .buttonStyle(TactilePressButtonStyle(pressedScale: 0.93))
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 2)
+
+                            DatePicker("到期日", selection: $maturityDate, in: startDate..., displayedComponents: .date)
+                        }
+
+                        if let maturityInterest = previewMaturityInterest, let days = termDaysCount {
                             HStack {
-                                Text("预计累计盈亏")
+                                Text("预计到期利息")
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text(Formatters.signedCurrency(pnl))
+                                Text("+\(Formatters.currency(maturityInterest))")
                                     .font(.subheadline.weight(.semibold))
                                     .monospacedDigit()
-                                    .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
-                                    .contentTransition(.numericText(value: pnl))
-                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
+                                    .foregroundStyle(CategoryColorToken.amber.color)
+                                    .contentTransition(.numericText(value: maturityInterest))
+                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: maturityInterest)
+                            }
+
+                            HStack {
+                                Text("到期预计本息（共 \(days) 天）")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                let totalAtMaturity = previewMarketValue + maturityInterest
+                                Text(Formatters.currency(totalAtMaturity))
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                                    .contentTransition(.numericText(value: totalAtMaturity))
+                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: totalAtMaturity)
+                            }
+                        } else if let annualInterest = previewAnnualInterest {
+                            HStack {
+                                Text("预计年利息")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text("+\(Formatters.currency(annualInterest)) / 年")
+                                    .font(.subheadline.weight(.semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(CategoryColorToken.amber.color)
+                                    .contentTransition(.numericText(value: annualInterest))
+                                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: annualInterest)
                             }
                         }
-                    }
 
-                    TextField("备注（选填，如定存到期日等）", text: $note)
-                        .focused($focusedField, equals: .note)
+                        TextField("备注（选填，如存单号、可否提前支取等）", text: $note)
+                            .focused($focusedField, equals: .note)
+                    } else {
+                        Toggle("记录成本（展示盈亏与收益率）", isOn: $trackCost.animation(Motion.standard(reduceMotion: reduceMotion)))
+
+                        if trackCost {
+                            if entryKind == .quoteTracked {
+                                Picker("成本口径", selection: $costEntryStyle.animation(Motion.micro(reduceMotion: reduceMotion))) {
+                                    ForEach(CostEntryStyle.allCases) { style in
+                                        Text(style.title).tag(style)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .onChange(of: costEntryStyle) { _, newStyle in
+                                    Haptics.selection()
+                                    convertCostStyle(to: newStyle)
+                                }
+                            }
+
+                            HStack {
+                                Text(entryKind == .quoteTracked && costEntryStyle == .unitCostPrice ? "持仓成本单价" : "累计投入本金（元）")
+                                Spacer()
+                                TextField("0.00", text: $costInputText)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .monospacedDigit()
+                                    .focused($focusedField, equals: .costInput)
+                            }
+
+                            if let totalCost = computedTotalCost {
+                                let pnl = previewMarketValue - totalCost
+                                HStack {
+                                    Text("预计累计盈亏")
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text(Formatters.signedCurrency(pnl))
+                                        .font(.subheadline.weight(.semibold))
+                                        .monospacedDigit()
+                                        .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
+                                        .contentTransition(.numericText(value: pnl))
+                                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
+                                }
+                            }
+                        }
+
+                        TextField("备注（选填，如定投计划等）", text: $note)
+                            .focused($focusedField, equals: .note)
+                    }
                 } header: {
-                    Text("选填信息")
+                    Text(isFixedAsset ? "利率与存期（选填）" : "选填信息")
+                } footer: {
+                    if isFixedAsset {
+                        Text("房产、车产等非生息资产可直接留空利率与到期日。")
+                    }
                 }
 
                 if isEditing {
@@ -391,7 +606,7 @@ struct HoldingFormSheet: View {
                     }
                 }
             }
-            .navigationTitle(isEditing ? "编辑资产" : "新增资产")
+            .navigationTitle(isEditing ? (isFixedAsset ? "编辑固定资产" : "编辑资产") : (isFixedAsset ? "新增固定资产" : "新增资产"))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(hasUnsavedChanges)
             .toolbar {
@@ -413,7 +628,7 @@ struct HoldingFormSheet: View {
                 debounceLookupTask?.cancel()
             }
             .sheet(isPresented: $showingNewCategorySheet) {
-                CategoryEditorSheet(existingCategory: nil, defaultPool: preselectedPool) { created in
+                CategoryEditorSheet(existingCategory: nil, defaultPool: isFixedAsset ? .fixed : preselectedPool) { created in
                     selectedCategoryID = created.id
                 }
             }
@@ -459,6 +674,17 @@ struct HoldingFormSheet: View {
                 trackCost = true
                 costEntryStyle = .totalPrincipal
                 costInputText = Formatters.editableDecimal(cost, maxDecimals: 2)
+            }
+
+            if let rate = item.annualRate, rate > 0 {
+                annualRateText = Formatters.editableDecimal(rate, maxDecimals: 2)
+            }
+            if let mat = item.maturityDate {
+                hasMaturityDate = true
+                maturityDate = mat
+                startDate = item.startDate ?? .now
+            } else if let start = item.startDate {
+                startDate = start
             }
         } else {
             if let preCat = preselectedCategory {
@@ -574,9 +800,12 @@ struct HoldingFormSheet: View {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
 
-        let chosenCategory = categories.first(where: { $0.id == selectedCategoryID })
+        let chosenCategory = selectedCategory
         let chosenAccount = accounts.first(where: { $0.id == selectedAccountID })
         let cleanedCode = entryKind == .quoteTracked ? code.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        let savedAnnualRate: Double? = isFixedAsset ? parsedAnnualRate : nil
+        let savedStartDate: Date? = (isFixedAsset && hasMaturityDate) ? startDate : nil
+        let savedMaturityDate: Date? = (isFixedAsset && hasMaturityDate) ? maturityDate : nil
 
         if let target = existingHolding {
             target.name = trimmedName
@@ -588,6 +817,9 @@ struct HoldingFormSheet: View {
             target.totalCost = computedTotalCost
             target.priceDateText = entryKind == .quoteTracked ? priceDateText : ""
             target.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
+            target.annualRate = savedAnnualRate
+            target.startDate = savedStartDate
+            target.maturityDate = savedMaturityDate
             target.assignCategory(chosenCategory)
             target.account = chosenAccount
             target.lastUpdated = .now
@@ -606,6 +838,9 @@ struct HoldingFormSheet: View {
                 note: note.trimmingCharacters(in: .whitespacesAndNewlines),
                 sortOrder: nextOrder,
                 fallbackPool: chosenCategory?.pool ?? preselectedPool,
+                annualRate: savedAnnualRate,
+                startDate: savedStartDate,
+                maturityDate: savedMaturityDate,
                 category: chosenCategory,
                 account: chosenAccount
             )

@@ -15,6 +15,7 @@ struct OverviewView: View {
 
     @State private var activePool: AssetPool = .investable
     @State private var showingAddHolding = false
+    @State private var editingFixedHolding: AssetHolding?
     @Namespace private var poolIndicatorNS
 
     private var snapshot: PortfolioSnapshot {
@@ -23,6 +24,46 @@ struct OverviewView: View {
 
     private var displayedSlices: [AllocationSlice] {
         activePool == .fixed ? snapshot.fixedSlices : snapshot.investableSlices
+    }
+
+    /// 固定资产明细列表：有到期日的排前面按最近到期升序，无到期日的按金额降序
+    private var fixedHoldings: [AssetHolding] {
+        holdings
+            .filter { $0.effectivePool == .fixed }
+            .sorted { lhs, rhs in
+                switch (lhs.maturityDate, rhs.maturityDate) {
+                case let (a?, b?):
+                    if a != b { return a < b }
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                case (nil, nil):
+                    break
+                }
+                if abs(lhs.marketValue - rhs.marketValue) > 0.01 {
+                    return lhs.marketValue > rhs.marketValue
+                }
+                return lhs.sortOrder < rhs.sortOrder
+            }
+    }
+
+    /// 固定资产合计预计年利息
+    private var fixedTotalAnnualInterest: Double {
+        fixedHoldings.compactMap(\.estimatedAnnualInterest).reduce(0, +)
+    }
+
+    /// 固定资产中生息部分的加权平均年化利率
+    private var fixedWeightedAnnualRate: Double? {
+        var weightedPrincipal: Double = 0
+        var weightedSum: Double = 0
+        for item in fixedHoldings {
+            guard let rate = item.annualRate, rate > 0, item.marketValue > 0 else { continue }
+            weightedPrincipal += item.marketValue
+            weightedSum += item.marketValue * rate
+        }
+        guard weightedPrincipal > 0 else { return nil }
+        return weightedSum / weightedPrincipal
     }
 
     var body: some View {
@@ -86,6 +127,9 @@ struct OverviewView: View {
             }
             .sheet(isPresented: $showingAddHolding) {
                 HoldingFormSheet(existingHolding: nil, preselectedPool: activePool)
+            }
+            .sheet(item: $editingFixedHolding) { item in
+                HoldingFormSheet(existingHolding: item)
             }
             .onAppear(perform: reconcileActivePool)
             .onChange(of: snapshot.hasInvestableHoldings) { _, _ in reconcileActivePool() }
@@ -196,7 +240,9 @@ struct OverviewView: View {
                     poolStripColumn(
                         pool: .fixed,
                         title: "固定资产",
-                        roleHint: "不计入投资占比",
+                        roleHint: (fixedTotalAnnualInterest > 0 && !refreshStore.hideAmounts)
+                            ? "年息约 \(Formatters.wholeCurrency(fixedTotalAnnualInterest))"
+                            : "不计入投资占比",
                         badgeColor: CategoryColorToken.amber.color,
                         amount: snapshot.fixedTotal,
                         sharePercent: snapshot.fixedShareOfNetWorth,
@@ -304,10 +350,24 @@ struct OverviewView: View {
                         .monospacedDigit()
                         .foregroundStyle(abs(targetSum - 100) >= 0.1 ? Color.orange : Color.secondary)
                 } else if activePool == .fixed {
-                    Text("占总净值 \(Formatters.percentPoints(snapshot.fixedShareOfNetWorth))")
-                        .font(.caption2.weight(.medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                    if let avgRate = fixedWeightedAnnualRate, fixedTotalAnnualInterest > 0 {
+                        if refreshStore.hideAmounts {
+                            Text("均息 \(Formatters.annualRate(avgRate)) · 占总净值 \(Formatters.percentPoints(snapshot.fixedShareOfNetWorth))")
+                                .font(.caption2.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("均息 \(Formatters.annualRate(avgRate)) · 年息约 \(Formatters.wholeCurrency(fixedTotalAnnualInterest))")
+                                .font(.caption2.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("占总净值 \(Formatters.percentPoints(snapshot.fixedShareOfNetWorth))")
+                            .font(.caption2.weight(.medium))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("共 \(displayedSlices.count) 类")
                         .font(.caption2.weight(.medium))
@@ -321,10 +381,19 @@ struct OverviewView: View {
             Divider()
 
             VStack(spacing: 0) {
-                ForEach(Array(displayedSlices.enumerated()), id: \.element.id) { index, slice in
-                    allocationSliceRow(slice: slice, showTargetIfPresent: activePool == .investable)
-                    if index < displayedSlices.count - 1 {
-                        Divider().padding(.leading, 50)
+                if activePool == .fixed {
+                    ForEach(Array(fixedHoldings.enumerated()), id: \.element.id) { index, item in
+                        fixedHoldingRow(holding: item)
+                        if index < fixedHoldings.count - 1 {
+                            Divider().padding(.leading, 50)
+                        }
+                    }
+                } else {
+                    ForEach(Array(displayedSlices.enumerated()), id: \.element.id) { index, slice in
+                        allocationSliceRow(slice: slice, showTargetIfPresent: true)
+                        if index < displayedSlices.count - 1 {
+                            Divider().padding(.leading, 50)
+                        }
                     }
                 }
             }
@@ -334,6 +403,169 @@ struct OverviewView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .animation(Motion.standard(reduceMotion: reduceMotion), value: activePool)
+    }
+
+    private func fixedHoldingRow(holding: AssetHolding) -> some View {
+        let tintColor = holding.category?.tintColor ?? CategoryColorToken.amber.color
+        let iconName = holding.category?.iconName ?? "lock.shield.fill"
+        let hasDepositMeta = holding.annualRate != nil || holding.maturityDate != nil
+        let shareOfFixed = snapshot.fixedTotal > 0 ? min(max(holding.marketValue / snapshot.fixedTotal, 0), 1) : 0
+        let shareOfNetWorth = snapshot.totalNetWorth > 0 ? (holding.marketValue / snapshot.totalNetWorth) * 100.0 : 0
+
+        return Button {
+            Haptics.lightImpact()
+            editingFixedHolding = holding
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(tintColor.opacity(0.15))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: iconName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(tintColor)
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    // 第一行：名称 + 存放账户 + 金额
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(holding.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+
+                        if let accName = holding.account?.name, !accName.isEmpty {
+                            Text(accName)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 4)
+
+                        Text(Formatters.currency(holding.marketValue, hidden: refreshStore.hideAmounts, compact: holding.marketValue >= 1_000_000))
+                            .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .contentTransition(.numericText(value: holding.marketValue))
+                            .animation(Motion.numeric(reduceMotion: reduceMotion), value: holding.marketValue)
+                    }
+
+                    // 第二行：利率与预计利息 / 倒计时（或非生息固定资产占比）
+                    if hasDepositMeta {
+                        HStack(spacing: 6) {
+                            HStack(spacing: 4) {
+                                if let rate = holding.annualRate, rate > 0 {
+                                    Text("年化 \(Formatters.annualRate(rate))")
+                                        .fontWeight(.medium)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let maturityInterest = holding.estimatedMaturityInterest {
+                                    Text("\(holding.annualRate != nil ? "· " : "")预计息 +\(Formatters.wholeCurrency(maturityInterest, hidden: refreshStore.hideAmounts))")
+                                        .foregroundStyle(refreshStore.hideAmounts ? Color.secondary : CategoryColorToken.amber.color)
+                                } else if let annualInterest = holding.estimatedAnnualInterest {
+                                    Text("\(holding.annualRate != nil ? "· " : "")年息约 \(Formatters.wholeCurrency(annualInterest, hidden: refreshStore.hideAmounts))")
+                                        .foregroundStyle(refreshStore.hideAmounts ? Color.secondary : CategoryColorToken.amber.color)
+                                } else if let catName = holding.category?.name {
+                                    Text(catName)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+
+                            Spacer(minLength: 4)
+
+                            if let days = holding.daysUntilMaturity {
+                                if holding.isMaturitySoonOrPast {
+                                    Text(Formatters.maturityCountdownText(days: days))
+                                        .fontWeight(.semibold)
+                                        .foregroundStyle(Color.orange)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                } else {
+                                    Text(Formatters.maturityCountdownText(days: days))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    } else {
+                        HStack {
+                            Text("\(holding.category?.name ?? "固定资产") · 占总净值 \(Formatters.percentPoints(shareOfNetWorth))")
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            if let pnl = holding.profitLoss {
+                                Text("盈亏 \(Formatters.signedCurrency(pnl, hidden: refreshStore.hideAmounts))")
+                                    .foregroundStyle(refreshStore.pnlColorScheme.color(for: pnl))
+                            }
+                        }
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                    }
+
+                    // 第三行：存期进度条 + 到期日（生息存单） / 池内占比条（房产等非定存资产）
+                    if let progress = holding.termProgress, let mat = holding.maturityDate {
+                        HStack(spacing: 8) {
+                            GeometryReader { geo in
+                                let width = max(geo.size.width, 1)
+                                ZStack(alignment: .leading) {
+                                    Capsule()
+                                        .fill(Color(.tertiarySystemFill))
+                                        .frame(height: 4)
+                                    if progress > 0 {
+                                        Capsule()
+                                            .fill(holding.isMaturitySoonOrPast ? Color.orange : tintColor)
+                                            .frame(width: max(width * progress, 3), height: 4)
+                                    }
+                                }
+                                .animation(Motion.standard(reduceMotion: reduceMotion), value: progress)
+                            }
+                            .frame(height: 4)
+
+                            Text("\(Formatters.dateYMD(mat)) 到期")
+                                .font(.system(size: 10))
+                                .monospacedDigit()
+                                .foregroundStyle(.tertiary)
+                                .fixedSize()
+                        }
+                    } else if let mat = holding.maturityDate {
+                        Text("到期日 \(Formatters.dateYMD(mat))")
+                            .font(.system(size: 10))
+                            .monospacedDigit()
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        GeometryReader { geo in
+                            let width = max(geo.size.width, 1)
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(Color(.tertiarySystemFill))
+                                    .frame(height: 4)
+                                if shareOfFixed > 0 {
+                                    Capsule()
+                                        .fill(tintColor)
+                                        .frame(width: max(width * shareOfFixed, 3), height: 4)
+                                }
+                            }
+                            .animation(Motion.standard(reduceMotion: reduceMotion), value: shareOfFixed)
+                        }
+                        .frame(height: 6)
+                    }
+                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.quaternary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9.5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(TactilePressButtonStyle(pressedScale: 0.992, pressedOpacity: 0.88))
     }
 
     private func allocationSliceRow(slice: AllocationSlice, showTargetIfPresent: Bool) -> some View {

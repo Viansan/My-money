@@ -160,9 +160,12 @@ enum DataBackupService {
                 name: "三年期大额存单",
                 valuationMode: .manualAmount,
                 manualAmount: 1000000,
-                totalCost: 1000000,
-                note: "归属固定资产，不稀释投资组合占比",
+                totalCost: nil,
+                note: "归属固定资产，到期自动还本付息",
                 sortOrder: 5,
+                annualRate: 2.35,
+                startDate: Calendar.current.date(byAdding: .year, value: -1, to: .now),
+                maturityDate: Calendar.current.date(byAdding: .year, value: 2, to: .now),
                 category: catReserve,
                 account: accBank
             )
@@ -227,6 +230,9 @@ enum DataBackupService {
                     note: h.note,
                     sortOrder: h.sortOrder,
                     fallbackPoolRaw: h.fallbackPoolRaw,
+                    annualRate: h.annualRate,
+                    startDate: h.startDate,
+                    maturityDate: h.maturityDate,
                     categoryID: h.category?.id,
                     accountID: h.account?.id
                 )
@@ -321,6 +327,9 @@ enum DataBackupService {
                 note: dto.note,
                 sortOrder: dto.sortOrder,
                 fallbackPool: AssetPool(rawValue: dto.fallbackPoolRaw) ?? .investable,
+                annualRate: dto.annualRate,
+                startDate: dto.startDate,
+                maturityDate: dto.maturityDate,
                 category: linkedCategory,
                 account: linkedAccount
             )

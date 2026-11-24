@@ -35,6 +35,10 @@ struct HoldingRowView: View {
         }
     }
 
+    private var isDepositStyleFixed: Bool {
+        holding.effectivePool == .fixed && (holding.annualRate != nil || holding.maturityDate != nil)
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
@@ -55,35 +59,62 @@ struct HoldingRowView: View {
                 }
 
                 HStack(spacing: 5) {
-                    if holding.valuationMode.usesSharesAndPrice && !holding.code.isEmpty {
-                        Text(holding.code)
-                            .font(.caption2.weight(.medium))
-                            .monospacedDigit()
-                            .foregroundStyle(accentTint)
-                            .padding(.horizontal, 4.5)
-                            .padding(.vertical, 1)
-                            .background(accentTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 3.5))
+                    if isDepositStyleFixed {
+                        if let rate = holding.annualRate, rate > 0 {
+                            Text("年化 \(Formatters.annualRate(rate))")
+                                .font(.caption2.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(CategoryColorToken.amber.color)
+                                .padding(.horizontal, 4.5)
+                                .padding(.vertical, 1)
+                                .background(CategoryColorToken.amber.color.opacity(0.12), in: RoundedRectangle(cornerRadius: 3.5))
+                        }
+
+                        if let tag = crossDimensionTag, !tag.isEmpty {
+                            Text(tag)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        if let days = holding.daysUntilMaturity {
+                            Text("· \(Formatters.maturityCountdownText(days: days))")
+                                .font(.caption2.weight(holding.isMaturitySoonOrPast ? .semibold : .regular))
+                                .monospacedDigit()
+                                .foregroundStyle(holding.isMaturitySoonOrPast ? Color.orange : Color.secondary)
+                                .lineLimit(1)
+                        }
                     } else {
-                        Text(holding.valuationMode.shortBadge)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 4.5)
-                            .padding(.vertical, 1)
-                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 3.5))
-                    }
+                        if holding.valuationMode.usesSharesAndPrice && !holding.code.isEmpty {
+                            Text(holding.code)
+                                .font(.caption2.weight(.medium))
+                                .monospacedDigit()
+                                .foregroundStyle(accentTint)
+                                .padding(.horizontal, 4.5)
+                                .padding(.vertical, 1)
+                                .background(accentTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 3.5))
+                        } else {
+                            Text(holding.valuationMode.shortBadge)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 4.5)
+                                .padding(.vertical, 1)
+                                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 3.5))
+                        }
 
-                    if let tag = crossDimensionTag, !tag.isEmpty {
-                        Text(tag)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                        if let tag = crossDimensionTag, !tag.isEmpty {
+                            Text(tag)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
 
-                    if !holding.priceDateText.isEmpty && holding.valuationMode.usesSharesAndPrice {
-                        Text("· \(holding.priceDateText)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                        if !holding.priceDateText.isEmpty && holding.valuationMode.usesSharesAndPrice {
+                            Text("· \(holding.priceDateText)")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
                     }
                 }
             }
@@ -98,26 +129,45 @@ struct HoldingRowView: View {
                     .contentTransition(.numericText(value: holding.marketValue))
                     .animation(Motion.numeric(reduceMotion: reduceMotion), value: holding.marketValue)
 
-                if holding.valuationMode.usesSharesAndPrice {
-                    Text("\(Formatters.shares(holding.shares, hidden: hideAmounts)) × \(Formatters.unitPrice(holding.latestPrice))")
-                        .font(.caption2)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText(value: holding.latestPrice))
-                }
-
-                if let pnl = holding.profitLoss {
-                    HStack(spacing: 3) {
-                        Text(Formatters.signedCurrency(pnl, hidden: hideAmounts))
-                            .contentTransition(.numericText(value: pnl))
-                        if let rate = holding.profitLossRate {
-                            Text("(\(Formatters.signedRate(rate, hidden: hideAmounts)))")
-                        }
+                if isDepositStyleFixed {
+                    if let maturityInterest = holding.estimatedMaturityInterest {
+                        Text("预计息 +\(Formatters.wholeCurrency(maturityInterest, hidden: hideAmounts))")
+                            .font(.caption2.weight(.medium))
+                            .monospacedDigit()
+                            .foregroundStyle(hideAmounts ? Color.secondary : CategoryColorToken.amber.color)
+                    } else if let annualInterest = holding.estimatedAnnualInterest {
+                        Text("年息约 \(Formatters.wholeCurrency(annualInterest, hidden: hideAmounts))")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    } else if let mat = holding.maturityDate {
+                        Text("\(Formatters.dateYMD(mat)) 到期")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
                     }
-                    .font(.caption2.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(pnlColorScheme.color(for: pnl))
-                    .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
+                } else {
+                    if holding.valuationMode.usesSharesAndPrice {
+                        Text("\(Formatters.shares(holding.shares, hidden: hideAmounts)) × \(Formatters.unitPrice(holding.latestPrice))")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.numericText(value: holding.latestPrice))
+                    }
+
+                    if let pnl = holding.profitLoss {
+                        HStack(spacing: 3) {
+                            Text(Formatters.signedCurrency(pnl, hidden: hideAmounts))
+                                .contentTransition(.numericText(value: pnl))
+                            if let rate = holding.profitLossRate {
+                                Text("(\(Formatters.signedRate(rate, hidden: hideAmounts)))")
+                            }
+                        }
+                        .font(.caption2.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(pnlColorScheme.color(for: pnl))
+                        .animation(Motion.numeric(reduceMotion: reduceMotion), value: pnl)
+                    }
                 }
             }
         }

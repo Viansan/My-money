@@ -45,6 +45,9 @@ struct BackupPayload: Codable {
         var note: String
         var sortOrder: Int
         var fallbackPoolRaw: String
+        var annualRate: Double? = nil
+        var startDate: Date? = nil
+        var maturityDate: Date? = nil
         var categoryID: UUID?
         var accountID: UUID?
     }

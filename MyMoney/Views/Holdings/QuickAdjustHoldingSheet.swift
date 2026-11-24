@@ -333,6 +333,8 @@ struct QuickAdjustHoldingSheet: View {
 
                             HStack(spacing: 10) {
                                 Text(holding.valuationMode.priceFieldLabel)
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
                                 TextField("单价", text: $unitPriceText)
                                     .keyboardType(.decimalPad)
                                     .autocorrectionDisabled()
@@ -392,6 +394,8 @@ struct QuickAdjustHoldingSheet: View {
 
                                     HStack(spacing: 6) {
                                         Text("同步\(deltaDirection == .add ? "增加" : "减少")本金")
+                                            .lineLimit(1)
+                                            .layoutPriority(1)
                                         AmountUnitBadge(text: deltaPrincipalText)
                                         TextField("不填保持原成本", text: $deltaPrincipalText)
                                             .keyboardType(.decimalPad)
@@ -442,6 +446,8 @@ struct QuickAdjustHoldingSheet: View {
                                     HStack(spacing: 6) {
                                         let isUnitCost = (usesShares && costEntryStyle == .unitCostPrice)
                                         Text(isUnitCost ? "持仓成本单价" : "累计投入本金（元）")
+                                            .lineLimit(1)
+                                            .layoutPriority(1)
                                         if !isUnitCost {
                                             AmountUnitBadge(text: costInputText)
                                         }

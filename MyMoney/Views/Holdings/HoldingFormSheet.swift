@@ -342,6 +342,8 @@ struct HoldingFormSheet: View {
                         if entryKind == .quoteTracked {
                             HStack(spacing: 8) {
                                 Text("持有份额 / 股数")
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
                                 TextField("0", text: $sharesText)
                                     .keyboardType(.decimalPad)
                                     .autocorrectionDisabled()
@@ -357,6 +359,8 @@ struct HoldingFormSheet: View {
 
                             HStack(spacing: 8) {
                                 Text(resolvedQuoteMode.priceFieldLabel)
+                                    .lineLimit(1)
+                                    .layoutPriority(1)
                                 TextField("1.0000", text: $latestPriceText)
                                     .keyboardType(.decimalPad)
                                     .autocorrectionDisabled()
@@ -373,10 +377,12 @@ struct HoldingFormSheet: View {
                             HStack {
                                 Text("折算当前市值")
                                     .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                                 Spacer()
                                 Text(Formatters.currency(previewMarketValue))
                                     .font(.callout.weight(.semibold))
                                     .monospacedDigit()
+                                    .lineLimit(1)
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 11)
@@ -403,6 +409,8 @@ struct HoldingFormSheet: View {
 
                                 HStack(spacing: 6) {
                                     Text("年化利率")
+                                        .lineLimit(1)
+                                        .layoutPriority(1)
                                     TextField("如 2.35", text: $annualRateText)
                                         .keyboardType(.decimalPad)
                                         .autocorrectionDisabled()
@@ -419,7 +427,7 @@ struct HoldingFormSheet: View {
                         }
                     }
 
-                    // 3. 归属维度（紧凑双行，右侧一键新建类别/账户）
+                    // 3. 归属维度（单行 Menu 选单 + 右侧一键新建类别/账户，彻底杜绝 Picker(.menu) 竖排折行）
                     GroupedFormSection(
                         header: "归属维度",
                         footer: selectedCategory.map {
@@ -428,19 +436,58 @@ struct HoldingFormSheet: View {
                                 : "归属「投资资产」，计入投资组合结构占比。"
                         }
                     ) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
                             Text("资产类别")
-                            Spacer(minLength: 8)
-                            Picker("资产类别", selection: $selectedCategoryID) {
-                                Text("未分类").tag(UUID?.none)
-                                ForEach(categories) { cat in
-                                    Text("[\(cat.pool == .investable ? "投资" : "固定")] \(cat.name)")
-                                        .tag(Optional(cat.id))
+                                .lineLimit(1)
+                                .layoutPriority(1)
+
+                            Spacer(minLength: 12)
+
+                            Menu {
+                                Button {
+                                    selectedCategoryID = nil
+                                } label: {
+                                    if selectedCategoryID == nil {
+                                        Label("未分类", systemImage: "checkmark")
+                                    } else {
+                                        Text("未分类")
+                                    }
                                 }
+
+                                ForEach(categories) { cat in
+                                    let title = "[\(cat.pool == .investable ? "投资" : "固定")] \(cat.name)"
+                                    Button {
+                                        selectedCategoryID = cat.id
+                                    } label: {
+                                        if selectedCategoryID == cat.id {
+                                            Label(title, systemImage: "checkmark")
+                                        } else {
+                                            Text(title)
+                                        }
+                                    }
+                                }
+
+                                Divider()
+
+                                Button {
+                                    showingNewCategorySheet = true
+                                } label: {
+                                    Label("新建资产类别...", systemImage: "plus")
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(
+                                        selectedCategory.map {
+                                            "[\($0.pool == .investable ? "投资" : "固定")] \($0.name)"
+                                        } ?? "未分类"
+                                    )
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.caption2.weight(.semibold))
+                                }
+                                .foregroundStyle(.secondary)
                             }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .tint(.secondary)
                             .onChange(of: selectedCategoryID) { _, _ in
                                 if isFixedAsset && entryKind == .quoteTracked
                                     && code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -454,44 +501,79 @@ struct HoldingFormSheet: View {
                                 showingNewCategorySheet = true
                             } label: {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.title3)
+                                    .font(.body)
                                     .foregroundStyle(Color.accentColor)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("新建资产类别")
                         }
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
+                        .padding(.vertical, 11)
                         .frame(minHeight: 44)
 
                         GroupedFormDivider()
 
-                        HStack(spacing: 8) {
+                        HStack(spacing: 10) {
                             Text("存放账户")
-                            Spacer(minLength: 8)
-                            Picker("存放账户", selection: $selectedAccountID) {
-                                Text("未指定账户").tag(UUID?.none)
-                                ForEach(accounts) { acc in
-                                    Text(acc.name).tag(Optional(acc.id))
+                                .lineLimit(1)
+                                .layoutPriority(1)
+
+                            Spacer(minLength: 12)
+
+                            Menu {
+                                Button {
+                                    selectedAccountID = nil
+                                } label: {
+                                    if selectedAccountID == nil {
+                                        Label("未指定账户", systemImage: "checkmark")
+                                    } else {
+                                        Text("未指定账户")
+                                    }
                                 }
+
+                                ForEach(accounts) { acc in
+                                    Button {
+                                        selectedAccountID = acc.id
+                                    } label: {
+                                        if selectedAccountID == acc.id {
+                                            Label(acc.name, systemImage: "checkmark")
+                                        } else {
+                                            Text(acc.name)
+                                        }
+                                    }
+                                }
+
+                                Divider()
+
+                                Button {
+                                    showingNewAccountSheet = true
+                                } label: {
+                                    Label("新建存放账户...", systemImage: "plus")
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(accounts.first(where: { $0.id == selectedAccountID })?.name ?? "未指定账户")
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+                                    Image(systemName: "chevron.up.chevron.down")
+                                        .font(.caption2.weight(.semibold))
+                                }
+                                .foregroundStyle(.secondary)
                             }
-                            .pickerStyle(.menu)
-                            .labelsHidden()
-                            .tint(.secondary)
 
                             Button {
                                 Haptics.lightImpact()
                                 showingNewAccountSheet = true
                             } label: {
                                 Image(systemName: "plus.circle.fill")
-                                    .font(.title3)
+                                    .font(.body)
                                     .foregroundStyle(Color.accentColor)
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("新建存放账户")
                         }
                         .padding(.horizontal, 16)
-                        .padding(.vertical, 9)
+                        .padding(.vertical, 11)
                         .frame(minHeight: 44)
                     }
 

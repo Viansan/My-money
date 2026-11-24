@@ -332,6 +332,8 @@ struct CategoryEditorSheet: View {
 
                                 HStack(spacing: 6) {
                                     Text("目标占比")
+                                        .lineLimit(1)
+                                        .layoutPriority(1)
                                     TextField("如 30", text: $targetRatioText)
                                         .keyboardType(.decimalPad)
                                         .autocorrectionDisabled()
